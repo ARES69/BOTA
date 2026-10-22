@@ -4,7 +4,7 @@
 # drift_check.py, который сверяет с ним код на сервере.
 #
 #     bash ci/publish_mirror.sh
-#     VPS=root@1.2.3.4 bash ci/publish_mirror.sh
+#     VPS=admin@1.2.3.4 bash ci/publish_mirror.sh
 #
 # Зачем именно так: GitHub из этой сети закрыт для чтения (деплой-ключ
 # аутентифицируется, но git отвечает «Repository not found»), а SSH до

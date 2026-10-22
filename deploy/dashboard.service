@@ -5,14 +5,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/bybit-funding
+# Панель — единственный юнит, который сознательно остаётся от root:
+# кнопки «запустить/остановить сервис бота» вызывают systemctl для
+# системного юнита, а непривилегированный пользователь этого не может.
+# Действия защищены паролём входа и токеном, bind — только localhost.
+WorkingDirectory=/home/admin/bybit-funding
 # .env — опционально (префикс "-"): оттуда панель берёт DASHBOARD_TOKEN
 # для кнопок управления. Файла нет — сервер просто не покажет кнопки.
-EnvironmentFile=-%h/bybit-funding/.env
+EnvironmentFile=-/home/admin/bybit-funding/.env
+Environment=DASHBOARD_BOT_SERVICE=funding-watch
 # --host НЕ указываем: дефолт 127.0.0.1, то есть панель видна только с самого
 # сервера (доступ — через SSH-туннель). Публичный bind открыл бы позицию,
 # PnL и кнопки управления всему интернету; health-check такой bind ловит.
-ExecStart=/usr/bin/python3 %h/bybit-funding/dashboard.py --serve 8050 --refresh 30
+ExecStart=/usr/bin/python3 /home/admin/bybit-funding/dashboard.py --serve 8050 --refresh 30
 Restart=always
 RestartSec=10
 

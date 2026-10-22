@@ -5,8 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/bybit-funding
-# Telegram-ключи читаются из %h/bybit-funding/.env автоматически (права 600)
-ExecStart=/usr/bin/python3 %h/bybit-funding/healthcheck.py --report-ok
+# Работает от root сознательно: health-check не только читает состояние, но
+# и чинит публичный bind панели перезапуском сервиса (см. heal_public_bind
+# в healthcheck.py). Без root автоисправление молча перестало бы работать.
+# Сам торговый бот при этом работает от admin.
+WorkingDirectory=/home/admin/bybit-funding
+# Telegram-ключи читаются из /home/admin/bybit-funding/.env автоматически (права 600)
+ExecStart=/usr/bin/python3 /home/admin/bybit-funding/healthcheck.py --report-ok
 # код 1 = найдены проблемы (алерт отправлен) — это не сбой самого юнита
 SuccessExitStatus=0 1

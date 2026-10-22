@@ -10,11 +10,16 @@
 ## Шаг 1. Подключиться
 
 ```bash
-ssh root@ТВОЙ_IP     # или ssh ubuntu@ТВОЙ_IP
+ssh admin@ТВОЙ_IP
 ```
 
-Приглашение вида `root@vm:~#` — вы внутри сервера. Все команды ниже вводятся
-**там**, в этом окне.
+Приглашение вида `admin@vm:~$` — вы внутри сервера. Все команды ниже вводятся
+**там**, в этом окне. Где нужны права root, перед командой стойт `sudo`;
+постоянная root-сессия — `sudo -i` (приглашение станет `root@vm:~#`).
+
+> Первичная настройка свежего сервера (когда пользователя `admin` ещё нет)
+> делается от root через консоль хостера или `ssh root@IP` — пока root-логин
+> не выключен. Дальше всё управление идёт через `admin`.
 
 ### Ключ вместо пароля (рекомендуется сразу)
 
@@ -41,7 +46,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_bybit -C "bybit-funding-vps"
 > по умолчанию берёт именно `~/.ssh/id_ed25519_bybit`; другой путь —
 > через переменную `VPS_KEY`.
 
-**2. Положить публичный ключ на сервер** (нужен root-пароль, один раз):
+**2. Положить публичный ключ на сервер** (нужен пароль, один раз):
 
 ```bash
 # из папки проекта — скрипт сам добавит ключ в authorized_keys
@@ -56,52 +61,89 @@ VPS_PASS='root-пароль' python deploy/install_key.py
 Альтернатива без пароля (если есть веб-консоль хостера) — вставить строку из
 `~/.ssh/id_ed25519_bybit.pub` в `/root/.ssh/authorized_keys` вручную.
 
-**3. Проверить, что вход по ключу работает:**
+> Скрипт `deploy/install_key.py` работает только до ужесточения входа:
+> после шага 5 root-логин и пароль выключены, и он уже не подключится.
+
+**3. Завести пользователя `admin`** (сразу после того, как ключ уже работает):
 
 ```bash
-ssh -o BatchMode=yes root@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'
+sudo useradd -m -s /bin/bash -g admin admin
+sudo install -d -m 700 -o admin -g admin /home/admin/.ssh
+sudo cp /root/.ssh/authorized_keys /home/admin/.ssh/authorized_keys
+sudo chown admin:admin /home/admin/.ssh/authorized_keys
+sudo chmod 600 /home/admin/.ssh/authorized_keys
+sudo usermod -p '*' admin                 # пароль заблокирован: вход только по ключу
+# эскалация без пароля — нужна deploy-скриптам (ssh не спрашивает пароль)
+echo 'admin ALL=(ALL:ALL) NOPASSWD: ALL' | sudo tee /etc/sudoers.d/90-admin-nopasswd
+sudo chmod 440 /etc/sudoers.d/90-admin-nopasswd
+sudo visudo -cf /etc/sudoers.d/90-admin-nopasswd   # должно быть: parsed OK
 ```
 
-**4. Зафиксировать ключ в `~/.ssh/config`,** чтобы `ssh root@IP` и `scp`
-подхватывали его сами (без флагов `-i`):
+**4. Проверить вход новым пользователем и зафиксировать ключ в `~/.ssh/config`:**
+
+```bash
+ssh -o BatchMode=yes admin@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'
+```
 
 ```
 Host ТВОЙ_IP
     HostName ТВОЙ_IP
-    User root
+    User admin
     IdentityFile ~/.ssh/id_ed25519_bybit
     IdentitiesOnly yes
 ```
 
-**5. Только после успешной проверки** отключите вход по паролю на сервере:
+**5. Только после этого** ужесточить вход (файл `deploy/sshd-hardening.conf`):
 
 ```bash
-# ВАЖНО: править нужно drop-in с приоритетным именем, а не сам sshd_config.
-# sshd берёт ПЕРВОЕ значение параметра, а Ubuntu-образы кладут
-# /etc/ssh/sshd_config.d/50-cloud-init.conf с "PasswordAuthentication yes".
-# Правка самого sshd_config или файла 60-*.conf НЕ сработает — "yes" из
-# 50-cloud-init.conf уже применён.
-sudo tee /etc/ssh/sshd_config.d/00-disable-password-auth.conf >/dev/null <<'EOF'
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PubkeyAuthentication yes
-PermitRootLogin prohibit-password
-EOF
-sudo chmod 600 /etc/ssh/sshd_config.d/00-disable-password-auth.conf
+# ВАЖНО: имя 00-hardening.conf выбрано не случайно. sshd берёт ПЕРВОЕ
+# значение параметра, а /etc/ssh/sshd_config подключает drop-in'ы самой
+# верхней строкой (Include ...). Файл 50-cloud-init.conf с
+# "PasswordAuthentication yes" проигрывает первому; файл 99-*.conf, наоборот,
+# ничего не переопределит.
+sudo install -m 644 deploy/sshd-hardening.conf /etc/ssh/sshd_config.d/00-hardening.conf
+sudo rm -f /etc/ssh/sshd_config.d/00-disable-password-auth.conf   # его содержимое вошло в новый файл
 sudo sshd -t                    # проверить синтаксис ДО reload — иначе sshd не поднимется
 sudo systemctl reload ssh       # reload, а не restart: текущие сессии не оборвутся
-sudo sshd -T | grep -i passwordauthentication   # должно быть: passwordauthentication no
+sudo sshd -T | grep -Ei '^(permitrootlogin|allowusers)'   # permitrootlogin no / allowusers admin
 ```
 
-Проверьте, что ключ работает **новой** сессией, а пароль отвергнут:
+Проверьте **новыми** сессиями: `admin` входит, `root` — нет:
 
 ```bash
-ssh -o BatchMode=yes root@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'   # должно напечатать ДОСТУП_ЕСТЬ
+ssh -o BatchMode=yes admin@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'   # должно напечатать ДОСТУП_ЕСТЬ
+ssh -o BatchMode=yes root@ТВОЙ_IP  'echo ДОСТУП_ЕСТЬ'   # должно быть Permission denied
 ```
 
-> ⚠️ Не отключайте пароль, пока `ssh -o BatchMode=yes` не отдал
-> `ДОСТУП_ЕСТЬ`. Иначе вы потеряете доступ к серверу.
-> Откат, если что-то пошло не так: `rm /etc/ssh/sshd_config.d/00-disable-password-auth.conf && sudo systemctl reload ssh`
+> ⚠️ Не закрывайте текущую сессию, пока `admin` не подтвердил вход. Если
+> что-то пошло не так, откат из **веб-консоли хостера**:
+> `rm /etc/ssh/sshd_config.d/00-hardening.conf && systemctl reload ssh`.
+
+**6. fail2ban** — баны за перебор ключей (`/etc/fail2ban/jail.local`):
+
+```bash
+sudo apt-get install -y fail2ban
+sudo tee /etc/fail2ban/jail.local >/dev/null <<'EOF'
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1 37.78.70.143 85.172.100.38 62.183.17.163 5.178.109.237
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+
+[sshd]
+enabled = true
+backend = systemd
+maxretry = 4
+bantime  = 2h
+EOF
+sudo systemctl enable --now fail2ban
+sudo fail2ban-client status sshd      # Currently banned — сколько адресов уже отбито
+```
+
+IP в `ignoreip` — ваши собственные адреса: если промахнуться ключом с них,
+бан не запрёт вас самого. Список адресов в `AllowUsers` НЕ указываем
+сознательно: домашний IP меняется, и жёсткий allowlist по адресу запирает
+доступ при смене провайдера.
 
 ---
 
@@ -136,10 +178,10 @@ sleep 3 && timedatectl status | grep -i synchronized
 
 ```bash
 # Linux/macOS:
-VPS=root@ТВОЙ_IP bash deploy/deploy_vps.sh
+VPS=admin@ТВОЙ_IP bash deploy/deploy_vps.sh
 
 # Windows (PowerShell):
-$env:VPS="root@ТВОЙ_IP"; bash deploy/deploy_vps.sh
+$env:VPS="admin@ТВОЙ_IP"; bash deploy/deploy_vps.sh
 ```
 
 Скрипт сам: создаст папки, скопирует все модули (`funding_executor.py`,
@@ -151,7 +193,7 @@ $env:VPS="root@ТВОЙ_IP"; bash deploy/deploy_vps.sh
 SSH-туннель. Порт 8050 наружу скрипт НЕ открывает:
 
 ```bash
-ssh -L 8050:127.0.0.1:8050 root@ТВОЙ_IP     # → http://127.0.0.1:8050
+ssh -L 8050:127.0.0.1:8050 admin@ТВОЙ_IP     # → http://127.0.0.1:8050
 ```
 
 Открыть панель всему интернету — только осознанно и обязательно с паролем:
@@ -173,14 +215,14 @@ DASHBOARD_PUBLIC=1 DASHBOARD_PASSWORD='ваш-пароль' bash deploy/deploy_v
 С **ноутбука** (в отдельном окне, не в том, где ssh):
 
 ```bash
-ssh root@ТВОЙ_IP "mkdir -p ~/bybit-funding/deploy ~/bybit-funding/snapshots"
+ssh admin@ТВОЙ_IP "mkdir -p ~/bybit-funding/deploy ~/bybit-funding/snapshots"
 scp funding_monitor.py funding_executor.py bybit_memory.py bybit_ws.py \
     trade_sanity.py dashboard.py dashboard_metrics.py backtest.py \
     healthcheck.py smotrim.py README.md config.example.json \
-    root@ТВОЙ_IP:~/bybit-funding/
-scp test_*.py run_tests.py root@ТВОЙ_IP:~/bybit-funding/
-scp deploy/*.service deploy/*.timer root@ТВОЙ_IP:~/bybit-funding/deploy/
-scp .env root@ТВОЙ_IP:~/bybit-funding/
+    admin@ТВОЙ_IP:~/bybit-funding/
+scp test_*.py run_tests.py admin@ТВОЙ_IP:~/bybit-funding/
+scp deploy/*.service deploy/*.timer admin@ТВОЙ_IP:~/bybit-funding/deploy/
+scp .env admin@ТВОЙ_IP:~/bybit-funding/
 ```
 
 На сервере:
@@ -395,7 +437,7 @@ python3 funding_executor.py void --force
 #    подробно — в начале инструкции, раздел «Ключ вместо пароля»
 ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_bybit
 python deploy/install_key.py --ask
-ssh -o BatchMode=yes root@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'   # проверить!
+ssh -o BatchMode=yes admin@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'   # проверить!
 # ⚠️ сначала убедись, что вход по ключу работает, ПОТОМ отключай пароль.
 # Правка самого sshd_config НЕ сработает — нужен drop-in 00-*.conf
 # (см. «Ключ вместо пароля», шаг 5): sshd берёт первое значение параметра,

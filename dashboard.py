@@ -2333,8 +2333,9 @@ def main():
         elif not TOKEN:
             print("Токен не задан — управляющие кнопки выключены.")
         if not public_bind:
+            # пользователь — admin: root-логин по SSH на сервере выключен
             print(f"С VPS/удалённо: ssh -L {args.serve}:127.0.0.1:{args.serve} "
-                  "root@host  →  http://127.0.0.1:%d" % args.serve)
+                  "admin@host  →  http://127.0.0.1:%d" % args.serve)
         try:
             srv.serve_forever()
         except KeyboardInterrupt:

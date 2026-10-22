@@ -11,17 +11,23 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/bybit-funding
-# %h — домашняя папка пользователя сервиса (root или ubuntu — без правки файла)
+# Бот не должен работать от root: ему нужны только свой каталог и сеть.
+# Логин root по SSH отключён, и весь доступ к серверу идёт через admin;
+# сервис запускается с теми же правами, что у владельца файлов.
+User=admin
+Group=admin
+# Путь зафиксирован явно: %h раскрывается в домашний каталог User=, а
+# полагаться на это в юните, где User меняется, — лишний источник ошибок.
+WorkingDirectory=/home/admin/bybit-funding
 # .env с ключами testnet читается скриптом автоматически (права 600!)
 # Параметры торговли — в config.json рядом со скриптом (см. config.example.json).
 # Здесь только режим запуска: их НЕ нужно дублировать флагами.
-ExecStart=/usr/bin/python3 %h/bybit-funding/funding_executor.py watch --mode testnet --ws
+ExecStart=/usr/bin/python3 /home/admin/bybit-funding/funding_executor.py watch --mode testnet --ws
 Restart=always
 RestartSec=30
 # журнал дублируется в watch.log (bot.log пишет сам бот — его смотрит панель)
-StandardOutput=append:%h/bybit-funding/watch.log
-StandardError=append:%h/bybit-funding/watch.log
+StandardOutput=append:/home/admin/bybit-funding/watch.log
+StandardError=append:/home/admin/bybit-funding/watch.log
 
 # --- устойчивость: ресурсы ---
 # не копим бесконечный лог: бот пишет heartbeat раз в минуту

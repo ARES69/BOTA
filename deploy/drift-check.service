@@ -6,15 +6,19 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/bybit-funding
-# Эталон — зеркало ~/bybit-drift/mirror.git: локальная копия обновляет его
-# при каждом пуше (ci/publish_mirror.sh), поэтому сети и доступа к GitHub
-# сервису не нужно. Кэш git — в ~/.cache/bybit-drift/, отчёт — в папке
-# проекта (он в .gitignore и в данных прогона, поэтому сам расхождением
-# не считается).
-ExecStart=/usr/bin/python3 %h/bybit-funding/drift_check.py --quiet
+# Сверке хватает чтения каталога проекта (владелец — admin) и зеркала
+# ~/bybit-drift: root не нужен.
+User=admin
+Group=admin
+# Эталон — зеркало /home/admin/bybit-drift/mirror.git: локальная копия
+# обновляет его при каждом пуше (ci/publish_mirror.sh), поэтому сети и
+# доступа к GitHub сервису не нужно. Кэш git — ~/.cache/bybit-drift/,
+# отчёт — в папке проекта (он в .gitignore и в данных прогона, поэтому
+# сам расхождением не считается).
+WorkingDirectory=/home/admin/bybit-funding
+ExecStart=/usr/bin/python3 /home/admin/bybit-funding/drift_check.py --quiet
 # Настройки — в .env, как у остальных юнитов (права 600).
-EnvironmentFile=-%h/bybit-funding/.env
+EnvironmentFile=-/home/admin/bybit-funding/.env
 
 # Код возврата 1 = найдены расхождения. Это НЕ сбой юнита, но и прятать
 # его в SuccessExitStatus 0 1 не будем: расхождение должно быть видно в

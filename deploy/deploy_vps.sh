@@ -3,7 +3,11 @@
 # Использование: VPS=user@IP bash deploy/deploy_vps.sh
 set -euo pipefail
 
-VPS="${VPS:?Укажите VPS=user@IP, например VPS=root@1.2.3.4 bash deploy/deploy_vps.sh}"
+# Цель задаётся явно — деплой на боевой сервер не должен стартовать от
+# случайного запуска без аргументов. Вход — пользователем admin (root-логин
+# по SSH выключен); sudo у него без пароля, поэтому установка юнитов идёт
+# без вопросов. Работает и алиас из ~/.ssh/config: VPS=bybit-vps.
+VPS="${VPS:?Укажите VPS=admin@IP или VPS=имя-из-ssh-config, например VPS=admin@1.2.3.4 bash deploy/deploy_vps.sh}"
 # Полный набор модулей бота: без bybit_memory.py/bybit_ws.py исполнитель
 # работает, но без памяти самообучения и без WS-ленты.
 FILES="funding_monitor.py funding_executor.py bybit_memory.py bybit_ws.py
@@ -87,7 +91,7 @@ ssh "$VPS" "timedatectl status | head -4"
 
 echo "==> [$VPS] настраиваю панель"
 # По умолчанию панель слушает ТОЛЬКО 127.0.0.1, и доступ к ней — через
-# SSH-туннель (ssh -L 8050:127.0.0.1:8050 root@IP). Публичный bind
+# SSH-туннель (ssh -L 8050:127.0.0.1:8050 admin@IP). Публичный bind
 # (0.0.0.0) открывает всему интернету позицию, PnL и кнопки управления,
 # поэтому включается только по явному запросу: DASHBOARD_PUBLIC=1.
 #

@@ -535,7 +535,7 @@ python dashboard.py --serve 8050 --host 0.0.0.0
 
 На VPS юнит `deploy/dashboard.service` по умолчанию запускает панель на
 localhost (`--host` не указан), и доступ — через SSH-туннель
-`ssh -L 8050:127.0.0.1:8050 root@host`. Публичный bind — отдельное осознанное
+`ssh -L 8050:127.0.0.1:8050 admin@host`. Публичный bind — отдельное осознанное
 решение: `DASHBOARD_PUBLIC=1 DASHBOARD_PASSWORD='...' bash deploy/deploy_vps.sh`
 ставит drop-in `deploy/dashboard-public.conf` (bind `0.0.0.0`), пишет пароль и
 `DASHBOARD_PUBLIC=1` в `~/bybit-funding/.env` и открывает порт 8050
@@ -859,6 +859,50 @@ sudo systemctl start drift-check.service; systemctl show -p Result -p ExecMainSt
 Эталон — любой git: `drift_check.py --repo <URL> --ref main` (нужен ключ
 `--identity`), `--local <папка>` — сверка с обычным каталогом без git.
 
+## Доступ к серверу (SSH)
+
+На VPS **root-логин по SSH выключен**, вход только пользователем `admin` по
+ключу, дальше — `sudo -i` при необходимости:
+
+```bash
+ssh admin@45.9.18.57        # или ssh bybit-vps (алиас из ~/.ssh/config)
+sudo -i                      # root-сессия
+```
+
+Политика — в [deploy/sshd-hardening.conf](deploy/sshd-hardening.conf),
+ставится как `/etc/ssh/sshd_config.d/00-hardening.conf`:
+
+- `PermitRootLogin no` — root не входит вообще (ключ бесполезен);
+- `AllowUsers admin` — единственный вход; список адресов **сознательно не
+  ограничен**: домашний IP меняется (за месяц в логах было четыре адреса),
+  и жёсткий allowlist запирает доступ при смене сети;
+- `PasswordAuthentication no`, `MaxAuthTries 4`, `LoginGraceTime 30`.
+
+Имя `00-*` важно: sshd берёт **первое** значение параметра, а drop-in'ы
+подключаются верхней строкой конфига — `50-cloud-init.conf` с
+`PasswordAuthentication yes` проигрывает первому файлу, а `99-*.conf`
+не переопределил бы ничего.
+
+Брутфорс ограничивает **fail2ban** (`/etc/fail2ban/jail.local`): 4 попытки за
+10 минут — бан на 2 часа; свои адреса в `ignoreip`, чтобы опечатка в ключе не
+заперла владельца.
+
+Права в системе: не всё работает от `admin` — где нужен root, это указано
+явно:
+
+| юнит | пользователь | почему |
+|---|---|---|
+| `funding-watch` | `admin` | торговому процессу нужен только свой каталог |
+| `drift-check` | `admin` | только читает код и зеркало |
+| `funding-health` | `root` | умеет чинить публичный bind перезапуском сервиса |
+| `dashboard` | `root` | кнопки вызывают `systemctl` для системного юнита |
+
+Каталог проекта — `/home/admin/bybit-funding` (бот и все данные), зеркало для
+сверки кода — `/home/admin/bybit-drift/mirror.git`.
+
+> Потеряли доступ? Правку конфига и откат можно сделать из веб-консоли
+> хостера: `rm /etc/ssh/sshd_config.d/00-hardening.conf && systemctl reload ssh`.
+
 ## Файлы
 
 - `funding_monitor.py` — монитор с риск-фильтром (только чтение)
@@ -878,6 +922,8 @@ sudo systemctl start drift-check.service; systemctl show -p Result -p ExecMainSt
   systemd, firewall, порт панели)
 - `deploy/drift-check.service`, `deploy/drift-check.timer` — ежедневная
   сверка кода на сервере с репозиторием
+- `deploy/sshd-hardening.conf` — политика SSH: без root-логина, вход только
+  `admin` по ключу
 - `drift_check.py` — сверка кода на сервере с репозиторием, отчёт при
   расхождении (`--local`, `--json`, `--no-alert`)
 - `test_drift_check.py` — логика этой сверки: расхождения, данные прогона,

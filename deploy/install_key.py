@@ -1,13 +1,18 @@
-"""Ставит локальный SSH-ключ в authorized_keys на VPS (по root-паролю).
+"""Ставит локальный SSH-ключ в authorized_keys на VPS (по паролю).
+
+ВАЖНО: это скрипт ПЕРВИЧНОЙ настройки свежего сервера. После ужесточения
+входа (deploy/sshd-hardening.conf: PermitRootLogin no + AllowUsers admin)
+root-логин и вход по паролю выключены, и скрипт больше не подключится —
+ключи тогда добавляются в /home/admin/.ssh/authorized_keys от admin.
 
 Пароль НИКОГДА не печатается и не пишется в историю команд:
 
     python deploy/install_key.py --ask      # спросит пароль в терминале
-    VPS_PASS='ваш-root-пароль' python deploy/install_key.py   # если так удобнее
+    VPS_PASS='ваш-пароль' python deploy/install_key.py   # если так удобнее
 
 Ключ берётся из ~/.ssh/id_ed25519_bybit (тот, что сгенерирован для 45.9.18.57).
 После успеха ключевой вход работает, и пароль больше не нужен:
-    ssh root@45.9.18.57
+    ssh root@45.9.18.57      # на свежем сервере, до ужесточения
 """
 from __future__ import annotations
 
