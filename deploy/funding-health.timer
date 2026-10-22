@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily health-check of the Bybit funding bot
+
+[Timer]
+OnCalendar=*-*-* 09:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

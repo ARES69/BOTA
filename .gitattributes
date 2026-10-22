@@ -1,0 +1,20 @@
+# Все текстовые файлы — только LF, и в репозитории, и в рабочей копии.
+#
+# Это не косметика. compare_copies.py сравнивает содержимое ПОБАЙТОВО
+# (sha1), поэтому копии проекта (Desktop, BOTA, GitHub, VPS) обязаны
+# содержать одни и те же байты. На Windows core.autocrlf=true превращал бы
+# рабочую копию в CRLF — и сверка начала бы «видеть» дрейф там, где его
+# нет, а bash-скрипты перестали бы запускаться.
+#
+# Обратная сторона: правьте файлы редактором, который не добавляет CRLF
+# (VS Code: "files.eol": "\n").
+* text=auto eol=lf
+
+*.sh     text eol=lf
+*.service text eol=lf
+*.timer  text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.json   text eol=lf
+*.md     text eol=lf
+*.py     text eol=lf

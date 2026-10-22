@@ -1,0 +1,12 @@
+[Unit]
+Description=Bybit Funding Bot daily health-check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/bybit-funding
+# Telegram-ключи читаются из %h/bybit-funding/.env автоматически (права 600)
+ExecStart=/usr/bin/python3 %h/bybit-funding/healthcheck.py --report-ok
+# код 1 = найдены проблемы (алерт отправлен) — это не сбой самого юнита
+SuccessExitStatus=0 1

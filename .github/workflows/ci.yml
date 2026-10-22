@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Тесты · Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 — нижняя граница (Ubuntu 22.04 без PPA), 3.12 — как на VPS,
+        # 3.14 — как на рабочей машине.
+        python: ["3.10", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Прогон всех тестов
+        run: python run_tests.py
+
+  copies:
+    name: Сверка копий и чистота репозитория
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: work
+
+      - name: Сверить дерево с тем, что закоммичено
+        run: |
+          set -euo pipefail
+          mkdir -p fresh
+          git -C work archive HEAD | tar -x -C fresh
+          python work/compare_copies.py work fresh
+
+      - name: Секреты не отслеживаются, дерево чистое
+        run: bash work/ci/check_repo.sh
+
+  vps-drift:
+    name: Дрейф кода на VPS
+    # Включается переменной репозитория ENABLE_VPS_DRIFT=true и секретами
+    # VPS_HOST / VPS_SSH_KEY. Пока выключено — задача пропускается.
+    if: vars.ENABLE_VPS_DRIFT == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: work
+
+      - name: Подготовить SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Сравнить репозиторий с кодом на VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+        run: |
+          set -euo pipefail
+          mkdir -p fresh vps
+          git -C work archive HEAD | tar -x -C fresh
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
+              root@"$VPS_HOST" \
+              'tar -czf - -C "$HOME/bybit-funding" \
+                 --exclude=.git --exclude=__pycache__ --exclude=_bak .' > vps.tar.gz
+          tar -xzf vps.tar.gz -C vps
+          python work/compare_copies.py fresh vps

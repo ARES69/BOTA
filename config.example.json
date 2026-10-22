@@ -1,0 +1,59 @@
+{
+  "_комментарий": "Параметры торговли для funding_executor. Значения из командной строки перекрывают этот файл. Секреты (.env) здесь НЕ хранить.",
+
+  "_режим": "testnet — не забыть сменить на mainnet при переходе",
+  "mode": "testnet",
+  "confirm-live": false,
+  "ws": true,
+  "no-auto": false,
+
+  "_деньги": "capital — капитал на ОДНУ пару (спот-нотион + маржа перпа); leverage — плечо перп-ноги (1.5–3)",
+  "capital": 1000,
+  "_портфель": "max-positions — сколько пар держать одновременно. 1 = прежнее поведение (одна позиция). Каждая новая пара получает min(capital, свободная маржа/1.1); меньше $50 свободной маржи — пара не открывается. Закрытие: close (единственная), close --symbol X, close --all",
+  "max-positions": 1,
+  "leverage": 2.0,
+
+  "_фильтр": "Какие окна считаем годными. Значения по умолчанию = пресет hold; опустите пороги (например min-apy30 4, min-pos 70, max-breakeven 30, pass-oi 3, fast-apy 2), чтобы входить чаще",
+  "preset": "hold",
+  "min-volume": 3.0,
+  "min-oi": 3.0,
+  "pass-oi": 20.0,
+  "prefilter": 60,
+  "fast-apy": 3.0,
+  "fast-top": 8,
+  "min-apy30": 10.0,
+  "min-pos": 80,
+  "min-basis": 0,
+  "max-breakeven": 14,
+
+  "_выход": "Когда закрывать позицию",
+  "hold-payouts": 2,
+  "exit-neg": 3,
+  "max-loss": 5.0,
+  "max-margin-risk": 70.0,
+  "max-delta-pct": 1.0,
+  "integrity-every": 60,
+
+  "_исполнение": "Как входим и выходим",
+  "maker-wait": 6.0,
+  "max-slip-bps": 15.0,
+  "max-spread": 0.5,
+  "min-depth": 1.0,
+  "max-entry-basis-pct": 0.5,
+  "taker-only": false,
+  "no-exchange-stop": false,
+
+  "_обучение": "Память самообучения: скоринг символов, калибровка порогов",
+  "no-learn": false,
+
+  "_цикл": "Частота итерации и полного скана, сек",
+  "interval": 15,
+  "full-every": 300,
+
+  "_уведомления": "no-notify: true — не слать в Telegram; report-every — отчёт (баланс счёта, PnL за день, открытая позиция и закрытые сделки) каждые N минут, 60 = раз в час, 0 — выключить",
+  "no-notify": false,
+  "report-every": 60,
+  "_сводка": "daily-report-at — ежедневная сводка в Telegram (баланс счёта, итог дня и недели) в ЧЧ:ММ, off — выключить; report-tz — часовой пояс отчётов: имя IANA (Europe/Moscow) или сдвиг (+03:00), пусто — время сервера (на VPS обычно UTC)",
+  "daily-report-at": "00:00",
+  "report-tz": ""
+}

@@ -1,0 +1,422 @@
+# 🚀 Запуск бота на VPS (Ubuntu) — инструкция
+
+Бот будет работать **24/7 сам**, переживать обрывы сети и перезагрузки.
+Ноутбук можно выключать.
+
+Понадобится: IP сервера, доступ по SSH, ~20 минут.
+
+---
+
+## Шаг 1. Подключиться
+
+```bash
+ssh root@ТВОЙ_IP     # или ssh ubuntu@ТВОЙ_IP
+```
+
+Приглашение вида `root@vm:~#` — вы внутри сервера. Все команды ниже вводятся
+**там**, в этом окне.
+
+### Ключ вместо пароля (рекомендуется сразу)
+
+SSH-ключ **не нужно нигде искать** — он создаётся на вашем ноутбуке, а
+публичная половина один раз кладётся на сервер. Пароль от сервера после
+этого можно отключить (сервера ломают перебором тысячи раз в день).
+
+**1. Сгенерировать ключ (на ноутбуке, один раз):**
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_bybit -C "bybit-funding-vps"
+```
+
+Пустая passphrase (Enter на оба вопроса) — чтобы деплой работал без
+интерактива. Создаются два файла:
+
+| файл | что это | можно ли показывать |
+|---|---|---|
+| `~/.ssh/id_ed25519_bybit` | **приватный** ключ | **никогда** — это вход в сервер |
+| `~/.ssh/id_ed25519_bybit.pub` | публичный ключ | можно — его и надо на сервер |
+
+> Если ключ уже создан (проверка: `ls ~/.ssh/id_ed25519_bybit*`) — шаг
+> пропускайте, генерировать второй не нужно. Скрипт `deploy/install_key.py`
+> по умолчанию берёт именно `~/.ssh/id_ed25519_bybit`; другой путь —
+> через переменную `VPS_KEY`.
+
+**2. Положить публичный ключ на сервер** (нужен root-пароль, один раз):
+
+```bash
+# из папки проекта — скрипт сам добавит ключ в authorized_keys
+python deploy/install_key.py --ask          # спросит пароль в терминале
+# или, если так удобнее (пароль попадёт в историю команд!):
+VPS_PASS='root-пароль' python deploy/install_key.py
+```
+
+Пароль берётся из переменной окружения и **не печатается** — в коде, в
+истории команд и в выводе его нет. Вариант `--ask` вообще не пишет пароль
+в историю: скрипт спрашивает его в терминале (ввод не отображается).
+Альтернатива без пароля (если есть веб-консоль хостера) — вставить строку из
+`~/.ssh/id_ed25519_bybit.pub` в `/root/.ssh/authorized_keys` вручную.
+
+**3. Проверить, что вход по ключу работает:**
+
+```bash
+ssh -o BatchMode=yes root@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'
+```
+
+**4. Зафиксировать ключ в `~/.ssh/config`,** чтобы `ssh root@IP` и `scp`
+подхватывали его сами (без флагов `-i`):
+
+```
+Host ТВОЙ_IP
+    HostName ТВОЙ_IP
+    User root
+    IdentityFile ~/.ssh/id_ed25519_bybit
+    IdentitiesOnly yes
+```
+
+**5. Только после успешной проверки** отключите вход по паролю на сервере:
+
+```bash
+# ВАЖНО: править нужно drop-in с приоритетным именем, а не сам sshd_config.
+# sshd берёт ПЕРВОЕ значение параметра, а Ubuntu-образы кладут
+# /etc/ssh/sshd_config.d/50-cloud-init.conf с "PasswordAuthentication yes".
+# Правка самого sshd_config или файла 60-*.conf НЕ сработает — "yes" из
+# 50-cloud-init.conf уже применён.
+sudo tee /etc/ssh/sshd_config.d/00-disable-password-auth.conf >/dev/null <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+EOF
+sudo chmod 600 /etc/ssh/sshd_config.d/00-disable-password-auth.conf
+sudo sshd -t                    # проверить синтаксис ДО reload — иначе sshd не поднимется
+sudo systemctl reload ssh       # reload, а не restart: текущие сессии не оборвутся
+sudo sshd -T | grep -i passwordauthentication   # должно быть: passwordauthentication no
+```
+
+Проверьте, что ключ работает **новой** сессией, а пароль отвергнут:
+
+```bash
+ssh -o BatchMode=yes root@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'   # должно напечатать ДОСТУП_ЕСТЬ
+```
+
+> ⚠️ Не отключайте пароль, пока `ssh -o BatchMode=yes` не отдал
+> `ДОСТУП_ЕСТЬ`. Иначе вы потеряете доступ к серверу.
+> Откат, если что-то пошло не так: `rm /etc/ssh/sshd_config.d/00-disable-password-auth.conf && sudo systemctl reload ssh`
+
+---
+
+## Шаг 2. Проверить Python и часы
+
+```bash
+python3 --version
+timedatectl status | head -5
+```
+
+Должно быть Python 3.10+ (весь код на чистом stdlib, `pip install` не нужен).
+
+**Часы критичны.** Bybit отклоняет подписанные запросы, если локальное время
+отличается больше чем на 5 секунд (ошибка `10002`) — тогда бот не сможет
+торговать вообще. Если `System clock synchronized: no`:
+
+```bash
+timedatectl set-ntp true
+sleep 3 && timedatectl status | grep -i synchronized
+```
+
+(Бот также поднимет алерт «ЧАСЫ СЕРВЕРА РАСХОДЯТСЯ С БИРЖЕЙ», если это
+всё-таки случится.)
+
+---
+
+## Шаг 3. Загрузить файлы
+
+### Способ А — автоматически (рекомендую)
+
+С **ноутбука**, из папки проекта:
+
+```bash
+# Linux/macOS:
+VPS=root@ТВОЙ_IP bash deploy/deploy_vps.sh
+
+# Windows (PowerShell):
+$env:VPS="root@ТВОЙ_IP"; bash deploy/deploy_vps.sh
+```
+
+Скрипт сам: создаст папки, скопирует все модули (`funding_executor.py`,
+`bybit_memory.py`, `bybit_ws.py`, …), проверит синтаксис, прогоняет офлайн-тесты,
+проверит часы, поставит systemd-сервисы, включит часовой PnL-отчёт
+(`report-every=60`) и откроет панель по `http://IP:8050` со входом по паролю
+(`ufw allow 8050/tcp`). Пароль — `DASHBOARD_PASSWORD` в файле `.env` на сервере:
+
+```bash
+ssh root@ТВОЙ_IP "echo 'DASHBOARD_PASSWORD=ваш-пароль' >> ~/bybit-funding/.env"
+```
+
+**Важно:** `.env` с ключами копируется **только если его ещё нет** на сервере —
+рабочие ключи на VPS не затираются. Форсировать: `ENVFILE=другой_файл bash ...`.
+
+### Способ Б — вручную
+
+С **ноутбука** (в отдельном окне, не в том, где ssh):
+
+```bash
+ssh root@ТВОЙ_IP "mkdir -p ~/bybit-funding/deploy ~/bybit-funding/snapshots"
+scp funding_monitor.py funding_executor.py bybit_memory.py bybit_ws.py \
+    trade_sanity.py dashboard.py dashboard_metrics.py backtest.py \
+    healthcheck.py smotrim.py README.md config.example.json \
+    root@ТВОЙ_IP:~/bybit-funding/
+scp test_*.py run_tests.py root@ТВОЙ_IP:~/bybit-funding/
+scp deploy/*.service deploy/*.timer root@ТВОЙ_IP:~/bybit-funding/deploy/
+scp .env root@ТВОЙ_IP:~/bybit-funding/
+```
+
+На сервере:
+
+```bash
+chmod 600 ~/bybit-funding/.env
+```
+
+`.env` — файл с ключами (создаётся вручную, в git не коммитится):
+
+```
+BYBIT_TESTNET_API_KEY=...
+BYBIT_TESTNET_API_SECRET=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+# панель по IP:порту — пароль обязателен, иначе сервис не стартует
+DASHBOARD_PASSWORD=ваш-пароль
+# говорит health-check, что публичный bind — сознательный выбор
+DASHBOARD_PUBLIC=1
+# токен кнопок управления (генерируется или задаётся вручную)
+DASHBOARD_TOKEN=...
+```
+
+Для **mainnet** добавить `BYBIT_API_KEY` / `BYBIT_API_SECRET` — ключи
+**без права вывода** и с IP-whitelist этого сервера.
+
+---
+
+## Шаг 4. Проверить на сервере
+
+```bash
+cd ~/bybit-funding
+
+# синтаксис и импорты
+python3 -m py_compile funding_executor.py bybit_memory.py bybit_ws.py \
+    trade_sanity.py dashboard.py dashboard_metrics.py && echo OK
+
+# офлайн-тесты (сеть не нужна; живой тест печатает SKIP)
+PYTHONIOENCODING=utf-8 python3 run_tests.py
+
+# живой отчёт
+python3 funding_monitor.py --top 5
+```
+
+---
+
+## Шаг 5. Запустить 24/7 (systemd)
+
+```bash
+sudo cp ~/bybit-funding/deploy/*.service ~/bybit-funding/deploy/*.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now funding-watch dashboard funding-health.timer
+systemctl status funding-watch dashboard --no-pager
+```
+
+Что поднялось:
+
+| сервис | что делает |
+|---|---|
+| `funding-watch` | сам бот (`watch`), перезапуск при падении |
+| `dashboard` | панель на порту 8050: `http://IP:8050`, вход по паролю, закрытие позиции, управление сервисом бота (`systemctl`) и ручной вход |
+| `funding-health.timer` | ежедневная проверка (09:00 UTC) + авто-восстановление |
+
+---
+
+## Настройка торговли: config.json
+
+Параметры торговли лежат в `~/bybit-funding/config.json` (деплой создаёт его
+из примера, если файла ещё нет). Правьте его вместо `ExecStart` в unit-файле:
+
+```bash
+nano ~/bybit-funding/config.json
+sudo systemctl restart funding-watch
+```
+
+```json
+{
+  "mode": "testnet",
+  "capital": 1000,
+  "max-positions": 1,
+  "leverage": 2.0,
+  "preset": "hold",
+  "hold-payouts": 2,
+  "exit-neg": 3,
+  "max-loss": 5.0,
+  "report-every": 60,
+  "daily-report-at": "00:00",
+  "report-tz": "+03:00"
+}
+```
+
+- `report-every` — часовой отчёт в Telegram (баланс счёта, PnL за день,
+  позиция, закрытые сделки); `daily-report-at` — ежедневная сводка (баланс,
+  итог дня и недели) в это время; `report-tz` — часовой пояс отчётов: имя
+  (`Europe/Moscow`) или сдвиг (`+03:00`). **Важно:** на VPS время обычно UTC,
+  а день считается по `report-tz` — без него сводка в «00:00» придёт в 03:00 МСК;
+- ключи, начинающиеся с `_`, — комментарии (игнорируются);
+- **несколько пар**: `"max-positions": 3` — бот держит до 3 пар одновременно;
+  каждая новая пар получает `min(capital, свободная маржа / 1.1)`; закрытие
+  конкретной пары — `close --symbol BTCUSDT`, всех сразу — `close --all`
+  (в панели у каждой пары свои кнопки);
+- флаг в командной строке **перекрывает** конфиг:
+  `python3 funding_executor.py watch --capital 500`;
+- опечатка в имени параметра — понятная ошибка при старте, а не тихий промах;
+- секреты (`BYBIT_API_KEY` и т.д.) остаются в `.env` — в конфиге их быть
+  не должно.
+
+Перед сменой капитала на живых деньгах проверь, что новые значения проходят
+бэктест (ниже) — иначе легко выставить непроходимый порог, и бот молча
+перестанет торговать.
+
+---
+
+## Бэктест перед запуском денег
+
+```bash
+python3 backtest.py --preset hold --sweep
+```
+
+Показывает, что стратегия дала бы на истории и какой порог лучший.
+Подробности и честные ограничения — в README, раздел «Бэктест».
+
+**Важно:** на данных осени 2026 бэктест показал, что фандинг на мейджерах
+не отбивает комиссию круга (покрытие ~0.02×), а базис перп/спот стабильно
+отрицательный (−0.05%). Значит пресет `hold` в это окно **не торгует** — и
+это правильно. Не «чините» это ослаблением порогов: бэктест покажет, что
+при ослаблении стратегия уходит в минус на комиссиях.
+
+---
+
+Управление:
+
+```bash
+sudo systemctl restart funding-watch     # перезапустить после правок кода
+sudo systemctl stop funding-watch
+systemctl status funding-watch --no-pager
+journalctl -u funding-watch -n 100       # последние 100 строк
+journalctl -u funding-watch -f           # смотреть вживую (Ctrl+C — выйти)
+tail -f ~/bybit-funding/bot.log          # журнал событий бота
+```
+
+---
+
+## Шпаргалка: торговля
+
+```bash
+cd ~/bybit-funding
+python3 funding_executor.py status       # позиция и PnL
+python3 funding_executor.py scan        # кто проходит фильтр
+python3 funding_executor.py check        # решение по выходу
+python3 funding_executor.py close       # закрыть позицию
+python3 funding_executor.py stats        # статистика сделок
+python3 funding_executor.py memory       # выводы памяти + пороги
+python3 funding_executor.py memory --relearn   # пересобрать память из bot.log
+```
+
+⚠️ `close` при фантомной позиции (на бирже её уже нет, а в `position.json`
+она ещё числится) **опасен** — докупит перп-ногу и оставит голый лонг.
+Тогда:
+
+```bash
+python3 funding_executor.py void --force
+```
+
+---
+
+## Переход на реальные деньги (mainnet)
+
+Только после нескольких недель нормальной работы на testnet.
+
+1. Создать ключи на bybit.com → API Management: **без права вывода**,
+   с **IP-whitelist** этого VPS.
+2. Добавить в `~/.env`:
+   ```
+   BYBIT_API_KEY=...
+   BYBIT_API_SECRET=...
+   ```
+   и `chmod 600 ~/.env`.
+3. Прогнать монитор с запасом по комиссиям:
+   ```bash
+   python3 funding_monitor.py --preset mainnet
+   ```
+   (в пресете `mainnet` пороги выше: `min_apy30 ≥ 15%`, `OI ≥ $30M`).
+4. Запустить с явным подтверждением (без флага бот не отправит ордера):
+   ```bash
+   python3 funding_executor.py watch --mode mainnet --confirm-live \
+       --preset mainnet --ws
+   ```
+5. И обновить сервис на mainnet:
+   ```bash
+   sudo nano /etc/systemd/system/funding-watch.service
+   # в ExecStart заменить --mode testnet на --mode mainnet --confirm-live --preset mainnet
+   sudo systemctl daemon-reload && sudo systemctl restart funding-watch
+   ```
+
+**Что страхует бота на mainnet:**
+- биржевой стоп-лосс на перп-ногу (срабатывает без нас, если VPS лежит);
+- проверка баланса = спот-нотион + маржа перпа до входа;
+- сверка расчётного funding с фактическим при каждом закрытии;
+- блокировка автОВхода при потере связи с биржей (30 минут);
+- атомарная запись `position.json` (падение не оставит «слепого» бота);
+- ежедневный health-check с алертом и авто-восстановлением.
+
+---
+
+## Безопасность сервера
+
+```bash
+# 1. Ключ вместо пароля (сервера с ssh ломают тысячами попыток в день)
+#    подробно — в начале инструкции, раздел «Ключ вместо пароля»
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_bybit
+python deploy/install_key.py --ask
+ssh -o BatchMode=yes root@ТВОЙ_IP 'echo ДОСТУП_ЕСТЬ'   # проверить!
+# ⚠️ сначала убедись, что вход по ключу работает, ПОТОМ отключай пароль.
+# Правка самого sshd_config НЕ сработает — нужен drop-in 00-*.conf
+# (см. «Ключ вместо пароля», шаг 5): sshd берёт первое значение параметра,
+# а 50-cloud-init.conf уже содержит "PasswordAuthentication yes".
+
+# 2. Firewall
+sudo ufw allow ssh && sudo ufw enable
+# Панель: СНАЧАЛА посмотрите, как она слушает порт:
+#   ss -ltn | grep 8050
+#   127.0.0.1:8050  → панель видна ТОЛЬКО с самого сервера: снаружи не нужна,
+#                     открывать порт НЕЛЬЗЯ, заходите через SSH-туннель
+#   0.0.0.0:8050    → панель видна всему интернету: нужен пароль
+#                     (DASHBOARD_PASSWORD) и тогда открываем порт:
+#   sudo ufw allow 8050/tcp
+# SSH-туннель (без открытого порта) — всегда безопасный вариант:
+#   ssh -L 8050:127.0.0.1:8050 root@IP   →   http://127.0.0.1:8050
+# Кнопки управления на панели работают с токеном DASHBOARD_TOKEN из
+# ~/bybit-funding/.env; без токена кнопок нет.
+
+# 3. Обновления раз в пару недель
+sudo apt update && sudo apt upgrade -y
+```
+
+Ключи Bybit — **никогда** без IP-whitelist и **никогда** с правом вывода.
+
+---
+
+## Если что-то пошло не так
+
+| Симптом | Что делать |
+|---|---|
+| `systemctl status` = failed | `journalctl -u funding-watch -n 50` — смотреть ошибку |
+| Бот не торгует, в логе `10002` | часы: `timedatectl set-ntp true` |
+| Бот не торгует, алерт «СТАТЕ ПОВРЕЖДЕНО» | `position.json` битый → проверь позицию на бирже; если её нет, `rm ~/bybit-funding/position.json.bak` и перезапуск |
+| Алерт «расхождение позиции» | позиция на бирже ≠ `position.json`: `close` (если ноги есть) или `void --force` (если позиции нет) |
+| Алерт «расхождение funding» | формулы разошлись с биржой — скинь мне цифры из лога |
+| Панель не открывается по IP | `systemctl status dashboard`; в `.env` должен быть `DASHBOARD_PASSWORD` (без него сервер не стартует); порт 8050 открыт: `ufw status` |
+| Панель просит пароль — не помню | новый пароль: `echo 'DASHBOARD_PASSWORD=новый' >> ~/bybit-funding/.env` (старую строку удалить), `systemctl restart dashboard` |
+| Панель показывает зелёный +$0.00 без сети | так и должно быть без `--no-live`; проверь `dashboard` в логе |

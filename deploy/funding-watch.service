@@ -1,0 +1,37 @@
+[Unit]
+Description=Bybit Funding Bot (watch, testnet)
+# системное время должно совпадать с биржей, иначе подпись не проходит
+# (ошибка 10002) и бот не может торговать вообще. ВАЖНО: After= живёт только
+# в секции [Unit] — в [Service] systemd его игнорирует с предупреждением
+# «Unknown key name 'After' in section 'Service'» (так и было в этой версии).
+# Все зависимости — одной строкой (и один раз), чтобы не зависеть от
+# порядка и правил накопления директив в systemd.
+After=network-online.target systemd-timesyncd.service ntp.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/bybit-funding
+# %h — домашняя папка пользователя сервиса (root или ubuntu — без правки файла)
+# .env с ключами testnet читается скриптом автоматически (права 600!)
+# Параметры торговли — в config.json рядом со скриптом (см. config.example.json).
+# Здесь только режим запуска: их НЕ нужно дублировать флагами.
+ExecStart=/usr/bin/python3 %h/bybit-funding/funding_executor.py watch --mode testnet --ws
+Restart=always
+RestartSec=30
+# журнал дублируется в watch.log (bot.log пишет сам бот — его смотрит панель)
+StandardOutput=append:%h/bybit-funding/watch.log
+StandardError=append:%h/bybit-funding/watch.log
+
+# --- устойчивость: ресурсы ---
+# не копим бесконечный лог: бот пишет heartbeat раз в минуту
+LogRateLimitIntervalSec=30
+LogRateLimitBurst=200
+# разумные лимиты: бот лёгкий, но WS-лента держит соединения
+MemoryMax=512M
+# при остановке сервиса бот успевает дописать position.json (атомарная запись)
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

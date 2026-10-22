@@ -1,0 +1,24 @@
+.env
+position.json
+snapshot.json
+__pycache__/
+*.pyc
+dashboard.html
+bot.log
+bot.log.*
+memory.json
+config.json
+backtest_data.json
+scalp_state.json
+health_state.json
+watch.out
+
+# Служебное
+.freebuff/
+.idea/
+.vscode/
+.venv/
+venv/
+*.orig
+*.rej
+.DS_Store
