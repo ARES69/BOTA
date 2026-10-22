@@ -1,19 +1,36 @@
+# Секреты и локальные настройки
 .env
+config.json
+
+# Данные прогона: состояние позиции, память, снимки
 position.json
 snapshot.json
-__pycache__/
-*.pyc
-dashboard.html
-bot.log
-bot.log.*
 memory.json
-config.json
 backtest_data.json
 scalp_state.json
 health_state.json
+snapshots/
+
+# Логи: bot.log (пишет бот), watch.log (systemd дублирует вывод),
+# stats.log; bot.log.1 … bot.log.5 — ротация внутри бота
+*.log
+bot.log.*
 watch.out
+
+# Артефакты атомарной записи и ручных бэкапов:
+# position.json.bak / .tmp, memory.json.pre-sanity.bak,
+# config.json.bak.<дата> (звёздочка нужна: .bak стоит не в конце имени)
+*.bak*
+*.tmp
+
+# Сборка панели и отчёт чекера дрейфа
+dashboard.html
 drift_report.txt
 drift_report.json
+
+# Python
+__pycache__/
+*.pyc
 
 # Служебное
 .freebuff/
