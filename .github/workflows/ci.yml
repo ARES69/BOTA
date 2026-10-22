@@ -1,5 +1,14 @@
 name: CI
 
+# Что и когда запускается:
+#   push          — любой пуш в любую ветку: 27 тестов + сверка копий;
+#   pull_request  — то же для PR;
+#   вручную       — кнопка «Run workflow» (workflow_dispatch).
+#
+# Задача vps-drift (сверка с кодом на сервере) выключена по умолчанию:
+# ей нужны секреты VPS_HOST / VPS_SSH_KEY. Включается переменной
+# репозитория ENABLE_VPS_DRIFT=true (Settings → Variables).
+
 on:
   push:
     branches: ["**"]
@@ -13,6 +22,14 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Тесты печатают кириллицу; на бегуне локаль C, но пусть будет явно.
+  PYTHONIOENCODING: utf-8
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   tests:
     name: Тесты · Python ${{ matrix.python }}
@@ -25,32 +42,66 @@ jobs:
         # 3.14 — как на рабочей машине.
         python: ["3.10", "3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
 
+      # Сторонних зависимостей у тестов нет (только stdlib: paramiko нужен
+      # лишь deploy/), поэтому pip install не требуется.
+
+      # Страховка от «тихого» сокращения набора: если тестовый файл потеряли
+      # или забыли закоммитить, прогон станет короче и это заметят сразу.
+      # Ожидаемое число можно поднять переменной репозитория EXPECTED_TESTS.
+      - name: Проверить, что набор тестов не потерялся
+        run: |
+          set -euo pipefail
+          expected="${{ vars.EXPECTED_TESTS }}"
+          [ -n "$expected" ] || expected=27
+          actual=$(python -c 'import sys; sys.path.insert(0, "."); import run_tests; print(len(run_tests.discover()))')
+          echo "тестовых файлов: $actual (ожидается $expected)"
+          if [ "$actual" -ne "$expected" ]; then
+            echo "::error::ожидалось $expected тестовых файлов, найдено $actual"
+            exit 1
+          fi
+
       - name: Прогон всех тестов
-        run: python run_tests.py
+        run: |
+          set -o pipefail
+          python run_tests.py | tee tests.log
+
+      - name: Сводка в интерфейс
+        if: always()
+        run: |
+          {
+            echo "### Тесты · Python ${{ matrix.python }}"
+            echo '```'
+            tail -n 8 tests.log 2>/dev/null || echo 'прогон не состоялся'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   copies:
     name: Сверка копий и чистота репозитория
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: work
 
-      - name: Сверить дерево с тем, что закоммичено
+      # Сверка через штатный compare_copies.py: рабочая копия против
+      # git archive HEAD. Ловит то, чего не видно глазами — CRLF-дрейф и
+      # расхождение байтов (compare_copies сравнивает sha1).
+      - name: Коммит воспроизводится байт в байт
         run: |
           set -euo pipefail
           mkdir -p fresh
           git -C work archive HEAD | tar -x -C fresh
           python work/compare_copies.py work fresh
 
-      - name: Секреты не отслеживаются, дерево чистое
+      # Секреты не отслеживаются + в дереве нет файлов, которых нет в коммите.
+      - name: Секреты и полнота дерева
         run: bash work/ci/check_repo.sh
 
   vps-drift:
@@ -61,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: work
 
