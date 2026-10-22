@@ -108,6 +108,8 @@ jobs:
     name: Дрейф кода на VPS
     # Включается переменной репозитория ENABLE_VPS_DRIFT=true и секретами
     # VPS_HOST / VPS_SSH_KEY. Пока выключено — задача пропускается.
+    # Ключ VPS_SSH_KEY должен быть в authorized_keys пользователя admin
+    # на сервере (root-логин отключён, работает только admin).
     if: vars.ENABLE_VPS_DRIFT == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -134,8 +136,9 @@ jobs:
           set -euo pipefail
           mkdir -p fresh vps
           git -C work archive HEAD | tar -x -C fresh
+          # admin, не root: root-логин на VPS отключён (sshd-hardening.conf)
           ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes \
-              root@"$VPS_HOST" \
+              admin@"$VPS_HOST" \
               'tar -czf - -C "$HOME/bybit-funding" \
                  --exclude=.git --exclude=__pycache__ --exclude=_bak .' > vps.tar.gz
           tar -xzf vps.tar.gz -C vps
