@@ -1,24 +1,18 @@
 [Unit]
-Description=Bybit Funding Dashboard (HTTP :8050, доступ по IP + пароль)
+Description=Bybit Funding Dashboard (HTTP :8050, localhost only)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/bybit-funding
-# .env — оттуда панель берёт DASHBOARD_PASSWORD (обязателен для bind 0.0.0.0)
-# и DASHBOARD_TOKEN (токен кнопок управления).
+# .env — опционально (префикс "-"): оттуда панель берёт DASHBOARD_TOKEN
+# для кнопок управления. Файла нет — сервер просто не покажет кнопки.
 EnvironmentFile=-%h/bybit-funding/.env
-# Панель слушает все интерфейсы: доступ http://<IP сервера>:8050.
-# Без DASHBOARD_PASSWORD в .env сервер НЕ стартует — панель показывает
-# позицию/PnL, умеет закрывать позицию, останавливать сервис бота и
-# открывать позицию руками, поэтому открытый порт допустим только со входом
-# по паролю (сессия в HttpOnly-cookie, /logout).
-# Сервис запускается от root — это нужно кнопкам управления ботом
-# (systemctl start|stop|restart %DASHBOARD_BOT_SERVICE%).
-Environment=DASHBOARD_BOT_SERVICE=funding-watch
-ExecStart=/usr/bin/python3 %h/bybit-funding/dashboard.py --serve 8050 \
-    --host 0.0.0.0 --refresh 30
+# --host НЕ указываем: дефолт 127.0.0.1, то есть панель видна только с самого
+# сервера (доступ — через SSH-туннель). Публичный bind открыл бы позицию,
+# PnL и кнопки управления всему интернету; health-check такой bind ловит.
+ExecStart=/usr/bin/python3 %h/bybit-funding/dashboard.py --serve 8050 --refresh 30
 Restart=always
 RestartSec=10
 

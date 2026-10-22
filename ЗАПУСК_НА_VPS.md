@@ -144,13 +144,26 @@ $env:VPS="root@ТВОЙ_IP"; bash deploy/deploy_vps.sh
 
 Скрипт сам: создаст папки, скопирует все модули (`funding_executor.py`,
 `bybit_memory.py`, `bybit_ws.py`, …), проверит синтаксис, прогоняет офлайн-тесты,
-проверит часы, поставит systemd-сервисы, включит часовой PnL-отчёт
-(`report-every=60`) и откроет панель по `http://IP:8050` со входом по паролю
-(`ufw allow 8050/tcp`). Пароль — `DASHBOARD_PASSWORD` в файле `.env` на сервере:
+проверит часы, поставит systemd-сервисы и включит часовой PnL-отчёт
+(`report-every=60`).
+
+**Панель по умолчанию слушает только `127.0.0.1`**, и доступ к ней — через
+SSH-туннель. Порт 8050 наружу скрипт НЕ открывает:
 
 ```bash
-ssh root@ТВОЙ_IP "echo 'DASHBOARD_PASSWORD=ваш-пароль' >> ~/bybit-funding/.env"
+ssh -L 8050:127.0.0.1:8050 root@ТВОЙ_IP     # → http://127.0.0.1:8050
 ```
+
+Открыть панель всему интернету — только осознанно и обязательно с паролем:
+
+```bash
+DASHBOARD_PUBLIC=1 DASHBOARD_PASSWORD='ваш-пароль' bash deploy/deploy_vps.sh
+```
+
+Тогда скрипт поставит drop-in `dashboard-public.conf` (bind `0.0.0.0`),
+запишет `DASHBOARD_PASSWORD` и `DASHBOARD_PUBLIC=1` в `.env` на сервере и
+откроет порт (`ufw allow 8050/tcp`). Без пароля панель с публичным bind
+не стартует (fail closed).
 
 **Важно:** `.env` с ключами копируется **только если его ещё нет** на сервере —
 рабочие ключи на VPS не затираются. Форсировать: `ENVFILE=другой_файл bash ...`.
@@ -183,12 +196,13 @@ BYBIT_TESTNET_API_KEY=...
 BYBIT_TESTNET_API_SECRET=...
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
-# панель по IP:порту — пароль обязателен, иначе сервис не стартует
-DASHBOARD_PASSWORD=ваш-пароль
-# говорит health-check, что публичный bind — сознательный выбор
-DASHBOARD_PUBLIC=1
 # токен кнопок управления (генерируется или задаётся вручную)
 DASHBOARD_TOKEN=...
+# Публичный доступ к панели по умолчанию НЕ включается: панель слушает
+# только 127.0.0.1, доступ — через SSH-туннель. Если включаете — пароль
+# обязателен, без него сервис не стартует:
+# DASHBOARD_PASSWORD=ваш-пароль
+# DASHBOARD_PUBLIC=1
 ```
 
 Для **mainnet** добавить `BYBIT_API_KEY` / `BYBIT_API_SECRET` — ключи
@@ -228,7 +242,7 @@ systemctl status funding-watch dashboard --no-pager
 | сервис | что делает |
 |---|---|
 | `funding-watch` | сам бот (`watch`), перезапуск при падении |
-| `dashboard` | панель на порту 8050: `http://IP:8050`, вход по паролю, закрытие позиции, управление сервисом бота (`systemctl`) и ручной вход |
+| `dashboard` | панель на `127.0.0.1:8050` — доступ через SSH-туннель (публичный bind — только по запросу `DASHBOARD_PUBLIC=1`): закрытие позиции, управление сервисом бота (`systemctl`) и ручной вход |
 | `funding-health.timer` | ежедневная проверка (09:00 UTC) + авто-восстановление |
 
 ---
@@ -417,6 +431,7 @@ sudo apt update && sudo apt upgrade -y
 | Бот не торгует, алерт «СТАТЕ ПОВРЕЖДЕНО» | `position.json` битый → проверь позицию на бирже; если её нет, `rm ~/bybit-funding/position.json.bak` и перезапуск |
 | Алерт «расхождение позиции» | позиция на бирже ≠ `position.json`: `close` (если ноги есть) или `void --force` (если позиции нет) |
 | Алерт «расхождение funding» | формулы разошлись с биржой — скинь мне цифры из лога |
-| Панель не открывается по IP | `systemctl status dashboard`; в `.env` должен быть `DASHBOARD_PASSWORD` (без него сервер не стартует); порт 8050 открыт: `ufw status` |
-| Панель просит пароль — не помню | новый пароль: `echo 'DASHBOARD_PASSWORD=новый' >> ~/bybit-funding/.env` (старую строку удалить), `systemctl restart dashboard` |
+| Панель не открывается по IP | так и должно быть: панель слушает `127.0.0.1`, а доступ — через туннель `ssh -L 8050:127.0.0.1:8050 root@IP`. Проверить: `systemctl status dashboard`, `ss -ltn | grep 8050` |
+| Нужен публичный доступ к панели | `DASHBOARD_PUBLIC=1 DASHBOARD_PASSWORD='...' bash deploy/deploy_vps.sh` — поставит drop-in `dashboard-public.conf`, запишет пароль в `.env` и откроет порт. Без пароля панель не стартует |
+| Панель просит пароль — не помню | пароль нужен только в публичном режиме: новый пароль в `.env` (`DASHBOARD_PASSWORD=...`, старую строку удалить), `systemctl restart dashboard` |
 | Панель показывает зелёный +$0.00 без сети | так и должно быть без `--no-live`; проверь `dashboard` в логе |

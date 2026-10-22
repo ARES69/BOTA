@@ -27,6 +27,7 @@ echo "==> [$VPS] копирую модули"
 # shellcheck disable=SC2086
 scp $FILES config.example.json "$VPS":~/bybit-funding/
 scp deploy/funding-watch.service deploy/dashboard.service \
+    deploy/dashboard-public.conf \
     deploy/funding-health.service deploy/funding-health.timer \
     "$VPS":~/bybit-funding/deploy/
 
@@ -82,20 +83,30 @@ ssh "$VPS" "cd ~/bybit-funding && python3 dashboard.py --no-live --refresh 0 --o
 echo "==> [$VPS] проверяю часы (10002 = подпись не пройдёт)"
 ssh "$VPS" "timedatectl status | head -4"
 
-echo "==> [$VPS] панель по IP:8050 — проверяю пароль входа"
+echo "==> [$VPS] настраиваю панель"
+# По умолчанию панель слушает ТОЛЬКО 127.0.0.1, и доступ к ней — через
+# SSH-туннель (ssh -L 8050:127.0.0.1:8050 root@IP). Публичный bind
+# (0.0.0.0) открывает всему интернету позицию, PnL и кнопки управления,
+# поэтому включается только по явному запросу: DASHBOARD_PUBLIC=1.
+#
 # Пароль и токен панели можно задать прямо здесь (переменные окружения
 # запускающего скрипта) — тогда они попадут в .env на сервере и .env
 # не придётся править руками. Значения в .env перезаписываются, чтобы
 # старый пароль не остался рядом с новым.
+PUBLIC="${DASHBOARD_PUBLIC:-0}"
 DASH_PW="${DASHBOARD_PASSWORD:-}"
 DASH_TOK="${DASHBOARD_TOKEN:-}"
-if [ -n "$DASH_PW" ]; then
-    echo "==> [$VPS] задаю DASHBOARD_PASSWORD и DASHBOARD_TOKEN в .env"
+if [ -n "$DASH_PW" ] || [ -n "$DASH_TOK" ]; then
+    if [ "$PUBLIC" = "1" ]; then
+        echo "==> [$VPS] задаю DASHBOARD_PASSWORD и DASHBOARD_TOKEN в .env"
+    else
+        echo "==> [$VPS] задаю DASHBOARD_TOKEN в .env (панель локальная)"
+    fi
     # Значения кодируем в base64: в пароле могут быть кавычки, пробелы и
     # спецсимволы, которые ломают и shell-квотирование, и python-литерал.
     PW_B64=$(printf '%s' "$DASH_PW" | base64 | tr -d '\n')
     TOK_B64=$(printf '%s' "$DASH_TOK" | base64 | tr -d '\n')
-    ssh "$VPS" "PW_B64='$PW_B64' TOK_B64='$TOK_B64' python3 - <<'PY'
+    ssh "$VPS" "PW_B64='$PW_B64' TOK_B64='$TOK_B64' PUBLIC='$PUBLIC' python3 - <<'PY'
 import base64
 import os
 
@@ -105,11 +116,18 @@ def dec(b64):
     return base64.b64decode(b64).decode('utf-8')
 
 p = os.path.expanduser('~/bybit-funding/.env')
-want = {'DASHBOARD_PASSWORD': dec(os.environ.get('PW_B64', '')),
-        'DASHBOARD_PUBLIC': '1'}
+public = os.environ.get('PUBLIC') == '1'
+
+want = {}
 tok = dec(os.environ.get('TOK_B64', ''))
 if tok:
     want['DASHBOARD_TOKEN'] = tok
+if public:
+    want['DASHBOARD_PASSWORD'] = dec(os.environ.get('PW_B64', ''))
+    want['DASHBOARD_PUBLIC'] = '1'
+else:
+    # локальный режим: флаг публичности из .env убираем
+    want['DASHBOARD_PUBLIC'] = ''
 lines = open(p, encoding='utf-8').read().splitlines() if os.path.exists(p) else []
 out = []
 seen = set()
@@ -119,28 +137,27 @@ for ln in lines:
         # старую строку заменяем, а не дублируем: иначе в .env останется
         # прежний пароль, и systemd возьмёт не тот
         if k not in seen:
-            out.append(f'{k}={want[k]}')
+            if want[k]:
+                out.append(f'{k}={want[k]}')
             seen.add(k)
         continue
     out.append(ln)
 for k, v in want.items():
-    if k not in seen:
+    if k not in seen and v:
         out.append(f'{k}={v}')
 open(p, 'w', encoding='utf-8').write('\n'.join(out) + '\n')
 os.chmod(p, 0o600)
-print('  .env обновлён:', ', '.join(sorted(want)))
+print('  .env обновлён:', ', '.join(sorted(k for k in want if want[k])))
 PY"
 fi
-if ! ssh "$VPS" "grep -q '^DASHBOARD_PASSWORD=.' ~/bybit-funding/.env 2>/dev/null"; then
-    echo "!! DASHBOARD_PASSWORD не задан в ~/bybit-funding/.env"
+if [ "$PUBLIC" = "1" ] && \
+   ! ssh "$VPS" "grep -q '^DASHBOARD_PASSWORD=.' ~/bybit-funding/.env 2>/dev/null"; then
+    echo "!! Публичный режим: DASHBOARD_PASSWORD не задан в ~/bybit-funding/.env"
     echo "   Панель с --host 0.0.0.0 без пароля НЕ стартует (fail closed)."
-    echo "   Добавь пароль и запусти скрипт снова:"
-    echo "     DASHBOARD_PASSWORD='ваш-пароль' bash deploy/deploy_vps.sh"
+    echo "   Задайте пароль и запустите скрипт снова:"
+    echo "     DASHBOARD_PUBLIC=1 DASHBOARD_PASSWORD='ваш-пароль' bash deploy/deploy_vps.sh"
     exit 1
 fi
-ssh "$VPS" "grep -q '^DASHBOARD_PUBLIC=' ~/bybit-funding/.env \
-                || echo 'DASHBOARD_PUBLIC=1' >> ~/bybit-funding/.env; \
-            chmod 600 ~/bybit-funding/.env; echo '  пароль задан, DASHBOARD_PUBLIC=1'"
 
 echo "==> [$VPS] ставлю systemd-сервисы"
 ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/funding-watch.service /etc/systemd/system/ && \
@@ -149,21 +166,53 @@ ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/funding-watch.service /etc/systemd/s
             $SUDO systemctl enable --now funding-watch dashboard && \
             sleep 3 && systemctl is-active funding-watch dashboard"
 
+# Публичный bind — только по запросу; drop-in переопределяет ExecStart.
+# systemd читает drop-in'ы только из <юнит>.d/*.conf — файл, положенный
+# просто в /etc/systemd/system/dashboard-public.conf, был бы мёртвым грузом:
+# панель молча осталась бы на localhost в обоих режимах.
+DROPIN_DIR=/etc/systemd/system/dashboard.service.d
+if [ "$PUBLIC" = "1" ]; then
+    echo "==> [$VPS] включаю публичный доступ к панели (0.0.0.0:8050)"
+    ssh "$VPS" "$SUDO mkdir -p $DROPIN_DIR && \
+                $SUDO cp ~/bybit-funding/deploy/dashboard-public.conf \
+                         $DROPIN_DIR/public.conf && \
+                $SUDO systemctl daemon-reload && \
+                $SUDO systemctl restart dashboard"
+else
+    echo "==> [$VPS] панель остаётся на 127.0.0.1 (доступ — через SSH-туннель)"
+    ssh "$VPS" "$SUDO rm -f $DROPIN_DIR/public.conf && \
+                $SUDO rmdir $DROPIN_DIR 2>/dev/null; \
+                $SUDO systemctl daemon-reload && \
+                $SUDO systemctl restart dashboard"
+fi
+
 echo "==> [$VPS] ставлю ежедневный health-check (таймер)"
 ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/funding-health.service ~/bybit-funding/deploy/funding-health.timer /etc/systemd/system/ && \
             $SUDO systemctl daemon-reload && \
             $SUDO systemctl enable --now funding-health.timer && \
             systemctl list-timers funding-health.timer --no-pager"
 
-echo "==> [$VPS] открываю порт панели (вход — только по паролю)"
-# ufw может не быть — тогда порт открыт по умолчанию, падать нельзя
-ssh "$VPS" "command -v ufw >/dev/null 2>&1 && { $SUDO ufw allow ssh >/dev/null 2>&1; \
-            $SUDO ufw allow 8050/tcp >/dev/null 2>&1; $SUDO ufw status | head -8; } \
-            || echo '  ufw не установлен — порт 8050 слушает все интерфейсы по умолчанию'"
+if [ "$PUBLIC" = "1" ]; then
+    echo "==> [$VPS] открываю порт панели (вход — только по паролю)"
+    # ufw может не быть — тогда порт открыт по умолчанию, падать нельзя
+    ssh "$VPS" "command -v ufw >/dev/null 2>&1 && { $SUDO ufw allow ssh >/dev/null 2>&1; \
+                $SUDO ufw allow 8050/tcp >/dev/null 2>&1; $SUDO ufw status | head -8; } \
+                || echo '  ufw не установлен — порт 8050 слушает все интерфейсы по умолчанию'"
+else
+    echo "==> [$VPS] порт 8050 наружу НЕ открываю — панель через SSH-туннель"
+    # Если панель раньше открывали наружу, убираем правило: иначе порт
+    # останется открытым, а слушать там уже нечего.
+    ssh "$VPS" "command -v ufw >/dev/null 2>&1 && { $SUDO ufw delete allow 8050/tcp >/dev/null 2>&1 || true; } ; true"
+fi
 
 echo "==> Готово. Панель:"
-echo "    http://<IP сервера>:8050  →  вход по паролю из DASHBOARD_PASSWORD"
-echo "    Локально без открытого порта: ssh -L 8050:127.0.0.1:8050 $VPS"
+if [ "$PUBLIC" = "1" ]; then
+    echo "    http://<IP сервера>:8050  →  вход по паролю из DASHBOARD_PASSWORD"
+else
+    echo "    http://127.0.0.1:8050  →  через SSH-туннель:"
+    echo "      ssh -L 8050:127.0.0.1:8050 $VPS"
+    echo "    (панель слушает только 127.0.0.1, порт наружу не открыт)"
+fi
 echo "    Кнопки управления живут с токеном из DASHBOARD_TOKEN в ~/bybit-funding/.env"
 echo "    Лог бота:  ssh $VPS 'tail -20 ~/bybit-funding/watch.log'"
 echo "    Статус:    ssh $VPS 'systemctl status funding-watch dashboard --no-pager'"

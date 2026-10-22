@@ -533,15 +533,16 @@ python dashboard.py --serve 8050 --host 0.0.0.0
 при рестарте панели** — после перезапуска нужно войти снова. После 5 неверных
 попыток с одного IP вход блокируется на 5 минут.
 
-На VPS юнит `deploy/dashboard.service` уже запускает панель с `--host 0.0.0.0`;
-нужны `DASHBOARD_PASSWORD` и `DASHBOARD_PUBLIC=1` в `~/bybit-funding/.env` и
-открытый порт 8050 (`ufw allow 8050/tcp`). `DASHBOARD_PUBLIC=1` говорит
-health-check, что публичный bind — сознательный выбор, но только при заданном
-пароле. Без этого флага health-check считает публичный bind проблемой и
-перезапускает панель на loopback (см. ниже).
-
-Только localhost / SSH-туннель по-прежнему работают: `--host` по умолчанию
-`127.0.0.1`, доступ через `ssh -L 8050:127.0.0.1:8050 root@host`.
+На VPS юнит `deploy/dashboard.service` по умолчанию запускает панель на
+localhost (`--host` не указан), и доступ — через SSH-туннель
+`ssh -L 8050:127.0.0.1:8050 root@host`. Публичный bind — отдельное осознанное
+решение: `DASHBOARD_PUBLIC=1 DASHBOARD_PASSWORD='...' bash deploy/deploy_vps.sh`
+ставит drop-in `deploy/dashboard-public.conf` (bind `0.0.0.0`), пишет пароль и
+`DASHBOARD_PUBLIC=1` в `~/bybit-funding/.env` и открывает порт 8050
+(`ufw allow 8050/tcp`). `DASHBOARD_PUBLIC=1` говорит health-check, что публичный
+bind — сознательный выбор, но только при заданном пароле. Без этого флага
+health-check считает публичный bind проблемой и перезапускает панель на
+loopback (см. ниже).
 
 ### Кнопки управления (режим --serve)
 
