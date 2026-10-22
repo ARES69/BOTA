@@ -194,20 +194,18 @@ ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/funding-health.service ~/bybit-fundi
             $SUDO systemctl enable --now funding-health.timer && \
             systemctl list-timers funding-health.timer --no-pager"
 
-echo "==> [$VPS] ставлю ежедневную сверку кода с репозиторием (таймер)"
+echo "==> [$VPS] обновляю зеркало-эталон для сверки кода"
+# Зеркало — срез того, что развёрнуто сейчас. Без него drift-check сравнивал
+# бы сервер со старым срезом и врал бы «всё совпадает».
+if ! MIRROR=bybit-drift/mirror.git VPS="$VPS" bash "$(dirname "$0")/../ci/publish_mirror.sh"; then
+    echo "!! зеркало не обновилось — drift-check будет сравнивать со старым"
+fi
+
+echo "==> [$VPS] ставлю ежедневную сверку кода с эталоном (таймер)"
 ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/drift-check.service ~/bybit-funding/deploy/drift-check.timer /etc/systemd/system/ && \
             $SUDO systemctl daemon-reload && \
             $SUDO systemctl enable --now drift-check.timer && \
             systemctl list-timers drift-check.timer --no-pager"
-# Ключ для чтения приватного репозитория делается один раз вручную (см.
-# README, «Сверка кода на сервере»): он не должен генерироваться при каждом
-# деплое, иначе старый ключ останется в GitHub и продолжит работать.
-if ! ssh "$VPS" "test -f ~/.ssh/github_deploy"; then
-    echo "!! нет ~/.ssh/github_deploy на сервере — сверка кода не сможет"
-    echo "   прочитать репозиторий. Одноразовая настройка описана в README"
-    echo "   (раздел «Сверка кода на сервере»); таймер уже включён и будет"
-    echo "   падать с кодом 2, пока ключа нет."
-fi
 
 if [ "$PUBLIC" = "1" ]; then
     echo "==> [$VPS] открываю порт панели (вход — только по паролю)"

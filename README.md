@@ -801,9 +801,10 @@ CI вида `vps-drift` смотрит на сервер снаружи. Но ч
 (ежедневно в 10:15, `Persistent=true` — пропущенный день отработает при
 следующем включении).
 
-Как работает: скрипт забирает ветку `main` из приватного репозитория в
-кэш `~/.cache/bybit-drift/` (только новое, `--depth 1`), распаковывает её
-во временный каталог и сравнивает с `~/bybit-funding` через
+Как работает: у сервера есть **зеркало** `~/bybit-drift/mirror.git`. Локальная
+копия отправляет в него свой HEAD при каждом пуше (`ci/publish_mirror.sh`, его
+вызывает `pre-push`-хук), а таймер раз в день забирает зеркало в кэш
+`~/.cache/bybit-drift/`, распаковывает и сравнивает с `~/bybit-funding` через
 `compare_copies.py` — те же правила, что у локальной сверки копий:
 
 - сравниваются только **файлы проекта** (код, тесты, `deploy/`, документация);
@@ -833,22 +834,30 @@ journalctl -u drift-check -n 30 --no-pager
 python3 drift_check.py --local /tmp/копия --report /tmp/r.txt
 ```
 
-Одноразовая настройка ключа (делается ОДИН раз; при каждом деплое ключ не
-перегенерируется, иначе старый останется в GitHub и продолжит работать):
+Почему не GitHub напрямую: сервер читает эталон из локального зеркала, а не
+из репозитория, чтобы сверка не зависела от доступа к GitHub с сервера (в
+этом аккаунте git по SSH отдаёт `Repository not found`, а Actions выключены)
+и не требовала хранить на сервере никаких токенов. Плата за это — зеркало
+обновляется тогда, когда пушит локальная копия; если оно старше недели,
+проверка печатает предупреждение, что сравнивает со старым срезом.
+
+Установка (таймер ставит `deploy/deploy_vps.sh`, вручную — так):
 
 ```bash
-# 1. на сервере — ключ только для чтения
-ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N "" -C "drift-check@vps"
+# на рабочей машине: отправить актуальный срез в зеркало
+bash ci/publish_mirror.sh
 
-# 2. на рабочей машине — добавить его в репозиторий как read-only deploy key
-gh repo deploy-key add <(ssh root@<IP> 'cat ~/.ssh/github_deploy.pub') \
-    --repo lookastarik/bybit-funding --title "vps-drift-check (read-only)"
-
-# 3. поставить таймер (это уже делает deploy/deploy_vps.sh)
+# на сервере: поставить таймер
 sudo cp ~/bybit-funding/deploy/drift-check.{service,timer} /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now drift-check.timer
 systemctl list-timers drift-check.timer --no-pager
+
+# прогнать сейчас, не ждать 10:15
+sudo systemctl start drift-check.service; systemctl show -p Result -p ExecMainStatus drift-check.service
 ```
+
+Эталон — любой git: `drift_check.py --repo <URL> --ref main` (нужен ключ
+`--identity`), `--local <папка>` — сверка с обычным каталогом без git.
 
 ## Файлы
 

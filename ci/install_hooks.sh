@@ -22,9 +22,14 @@ cat > "$hooks/pre-push" <<EOF
 # Установлен ci/install_hooks.sh. Локальная проверка перед отправкой.
 # Отключить: rm "$hooks/pre-push"
 set -uo pipefail
-exec bash "$root/ci/check_local.sh"
+bash "$root/ci/check_local.sh" || exit \$?
+# Эталон для drift-check на сервере: обновляем при каждом пуше.
+# Неудача не блокирует пуш — это мониторинг, а не гейт.
+bash "$root/ci/publish_mirror.sh" >/dev/null 2>&1 \\
+    || echo "ВНИМАНИЕ: зеркало на VPS не обновлено — drift-check сравнит со старым эталоном"
 EOF
 chmod +x "$hooks/pre-push"
 
 echo "Установлен хук: $hooks/pre-push"
-echo "Теперь каждый 'git push' сначала прогонит тесты и сверку копий."
+echo "Теперь каждый 'git push' сначала прогонит тесты и сверку копий,"
+echo "а затем обновит зеркало на VPS для drift-check."

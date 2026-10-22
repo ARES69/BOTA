@@ -7,10 +7,11 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=%h/bybit-funding
-# Эталон — origin/main (то, что запушили с рабочей машины); кэш git лежит в
-# ~/.cache/bybit-drift/, отчёт — в папке проекта (он в .gitignore и в
-# данных прогона, поэтому сам расхождением не считается).
-# Ключ deploy-ключа GitHub — ~/.ssh/github_deploy (только чтение).
+# Эталон — зеркало ~/bybit-drift/mirror.git: локальная копия обновляет его
+# при каждом пуше (ci/publish_mirror.sh), поэтому сети и доступа к GitHub
+# сервису не нужно. Кэш git — в ~/.cache/bybit-drift/, отчёт — в папке
+# проекта (он в .gitignore и в данных прогона, поэтому сам расхождением
+# не считается).
 ExecStart=/usr/bin/python3 %h/bybit-funding/drift_check.py --quiet
 # Настройки — в .env, как у остальных юнитов (права 600).
 EnvironmentFile=-%h/bybit-funding/.env

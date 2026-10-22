@@ -13,11 +13,16 @@ sha1 — через штатный compare_copies.py, чтобы правила 
 bot.log, *.bak, *.log, drift_report.txt, каталог _bak) в версию не входят и
 расхождением не считаются.
 
+Эталон — зеркало git на самом сервере (`~/bybit-drift/mirror.git`), куда
+локальная копия отправляет свой HEAD при каждом пуше (ci/publish_mirror.sh).
+Поэтому проверка не зависит ни от GitHub, ни от того, включён ли доступ с
+сервера наружу: SSH до сервера уже есть, а зеркало лежит локально.
+
 Запуск (обычно из таймера deploy/drift-check.timer):
 
-    python drift_check.py                     # эталон — origin/main из git
-    python drift_check.py --local /путь       # эталон — локальная папка
-    python drift_check.py --repo URL --ref main
+    python drift_check.py                     # эталон — локальное зеркало
+    python drift_check.py --local /путь       # эталон — обычная папка
+    python drift_check.py --repo URL --ref main   # эталон — любой git (напр. GitHub)
     python drift_check.py --no-alert          # без Telegram
     python drift_check.py --json              # машинный вывод
 
@@ -54,11 +59,16 @@ if HERE not in sys.path:
 
 import compare_copies as C  # noqa: E402
 
-DEFAULT_REPO = "git@github.com:lookastarik/bybit-funding.git"
+# Зеркало, куда локальная копия пушит свой HEAD (ci/publish_mirror.sh).
+# Путь локальный — git fetch работает без сети и без ключей.
+DEFAULT_REPO = os.path.join(os.path.expanduser("~"), "bybit-drift", "mirror.git")
 DEFAULT_REF = "main"
 DEFAULT_CACHE = os.path.join(os.path.expanduser("~"), ".cache", "bybit-drift", "repo.git")
 DEFAULT_REPORT = os.path.join(HERE, "drift_report.txt")
-DEFAULT_IDENTITY = os.path.join(os.path.expanduser("~"), ".ssh", "github_deploy")
+
+# Эталон старше этого срока — предупреждаем: сверка сравнивает со старым
+# срезом кода, и «всё совпадает» будет неправдой.
+STALE_HOURS = 168
 
 FETCH_TIMEOUT = 180          # секунд на git fetch: медленная сеть — не повод висеть
 
@@ -194,6 +204,26 @@ def payload(diff: dict, *, repo: str, ref: str, sha: str, live_dir: str) -> dict
     }
 
 
+def _warn_if_stale(repo: str, ref: str, cache: str) -> None:
+    """Предупредить, если эталон давно не обновлялся.
+
+    Зеркало обновляет локальная копия при пуше. Если она месяц не пушила,
+    сверка сравнивает сервер со старым срезом и может говорить «совпадает»
+    про код, которого уже нет в работе — об этом надо сказать вслух.
+    """
+    try:
+        raw = subprocess.run(["git", "-C", cache, "log", "-1", "--format=%ct",
+                              "FETCH_HEAD"], capture_output=True, text=True)
+        ts = int((raw.stdout or "0").strip() or 0)
+    except (ValueError, OSError):
+        return
+    age_h = (time.time() - ts) / 3600.0 if ts else 0.0
+    if age_h > STALE_HOURS:
+        print(f"ВНИМАНИЕ: эталон обновлён {age_h / 24:.0f} дн. назад — "
+              f"возможно, локальная копия давно не пушила (ci/publish_mirror.sh)",
+              file=sys.stderr)
+
+
 # ------------------------------------------------------------------ уведомление
 def load_env(path: str) -> None:
     """Прочитать .env проекта (как healthcheck): секреты нужны для Telegram."""
@@ -241,13 +271,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dir", default=HERE,
                    help=f"каталог проекта на сервере (default {HERE})")
     p.add_argument("--repo", default=DEFAULT_REPO,
-                   help=f"git-репозиторий-эталон (default {DEFAULT_REPO})")
+                   help=f"git-эталон: путь к зеркалу или URL (default {DEFAULT_REPO})")
     p.add_argument("--ref", default=DEFAULT_REF,
                    help=f"ветка эталона (default {DEFAULT_REF})")
     p.add_argument("--cache", default=DEFAULT_CACHE,
                    help="кэш git-репозитория (default ~/.cache/bybit-drift/repo.git)")
-    p.add_argument("--identity", default=DEFAULT_IDENTITY,
-                   help=f"SSH-ключ для GitHub (default {DEFAULT_IDENTITY})")
+    p.add_argument("--identity", default=None,
+                   help="SSH-ключ, если эталон — удалённый git по ssh")
     p.add_argument("--local", default=None,
                    help="эталон — обычная папка (без git); для локальной проверки")
     p.add_argument("--report", default=DEFAULT_REPORT,
@@ -276,9 +306,11 @@ def main(argv: list[str] | None = None) -> int:
             sha, repo, ref = "local", ref_dir, "-"
         else:
             tmp = tempfile.mkdtemp(prefix="drift-ref-")
-            identity = args.identity if os.path.exists(args.identity) else None
+            identity = args.identity if (args.identity
+                                         and os.path.exists(args.identity)) else None
             sha = fetch_reference(args.repo, args.ref, args.cache, tmp, identity)
             ref_dir, repo, ref = tmp, args.repo, args.ref
+            _warn_if_stale(args.repo, args.ref, args.cache)
 
         diff = collect(ref_dir, live_dir)
         drift = has_drift(diff)
