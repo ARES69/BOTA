@@ -73,13 +73,29 @@ def main() -> int:
                 and not os.path.exists(report))
 
     # 2. разошлось содержимое → код 1 и отчёт с вердиктом
+    # mtime разводим явно: две записи в одну секунду дают «время совпадает»
     write(live, "bot.py", "print(2)\n")
+    os.utime(os.path.join(ref, "bot.py"), (1_700_000_000, 1_700_000_000))
+    os.utime(os.path.join(live, "bot.py"), (1_700_100_000, 1_700_100_000))
     rc, out, _ = run(["--local", ref, "--dir", live, "--report", report])
     text = open(report, encoding="utf-8").read() if os.path.exists(report) else ""
     ok &= check("изменённый файл → код 1, отчёт записан",
                 rc == 1 and "ВЕРДИКТ" in text and "bot.py" in text)
-    ok &= check("в отчёте видно, кто новее",
-                "bot.py" in text and "новее" in text)
+    # live записан позже эталона → новее СЕРВЕР, а не наоборот (перепутать
+    # направление легко: отчёт тогда советует ровно обратное)
+    ok &= check("в отчёте «новее на сервере — правка мимо git»",
+                "новее на сервере — правка мимо git" in text
+                and "сервер новее" in text)
+
+    # обратное направление: эталон новее (сервер не развёрнут)
+    write(ref, "bot.py", "print(3)\n")
+    os.utime(os.path.join(ref, "bot.py"), (1_800_000_000, 1_800_000_000))
+    os.utime(os.path.join(live, "bot.py"), (1_700_000_000, 1_700_000_000))
+    run(["--local", ref, "--dir", live, "--report", report])
+    text = open(report, encoding="utf-8").read()
+    ok &= check("новее эталон → «сервер не развёрнут»",
+                "новее в репозитории — сервер не развёрнут" in text
+                and "сервер отстал" in text)
 
     # 3. файл только на сервере (правка мимо git)
     write(live, "hotfix.py", "x = 1\n")

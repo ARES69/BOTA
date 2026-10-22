@@ -132,12 +132,36 @@ def collect(ref_dir: str, live_dir: str) -> dict:
     ref_files, _ = C.scan(ref_dir)
     live_files, _ = C.scan(live_dir)
     diff = C.compare(ref_files, live_files)
-    diff["verdict"] = C.verdict(diff)
+    diff["verdict"] = human_verdict(diff)
     return diff
 
 
 def has_drift(diff: dict) -> bool:
     return bool(diff["only_a"] or diff["only_b"] or diff["differ"])
+
+
+def human_verdict(diff: dict) -> str:
+    """Вердикт compare_copies на человеческом языке этой проверки.
+
+    compare_copies говорит «A» и «B»; здесь A — эталон (репозиторий),
+    B — живой каталог (сервер). Без перевода отчёт читается наоборот.
+    """
+    v = C.verdict(diff)
+    if v.startswith("копии совпадают"):
+        return "сервер совпадает с репозиторием"
+    if v.startswith("A новее"):
+        return "репозиторий новее — сервер отстал (разверните)"
+    if v.startswith("B новее"):
+        return "сервер новее — на сервере правка мимо git"
+    if v.startswith("B отстаёт"):
+        return "на сервере не хватает файлов из репозитория (разверните)"
+    if v.startswith("A отстаёт"):
+        return "на сервере есть файлы, которых нет в репозитории (правка мимо git)"
+    if "mtime не поможет" in v:
+        return ("файлы разного содержимого с равным временем — сравнивайте "
+                "по смыслу")
+    return ("файлы новее с обеих сторон — сервер и репозиторий разошлись, "
+            "решать по каждому файлу")
 
 
 def fingerprint(diff: dict) -> str:
@@ -170,9 +194,10 @@ def build_report(diff: dict, *, ref_dir: str, live_dir: str, repo: str,
     if diff["differ"]:
         out.append("")
         for d in diff["differ"]:
-            where = ("новее на сервере — правка мимо git"
-                     if d["newer"] == "A" else
-                     "новее в репозитории — сервер не развёрнут")
+            # newer == "A" — новее эталон (репозиторий), "B" — сервер
+            where = {"A": "новее в репозитории — сервер не развёрнут",
+                     "B": "новее на сервере — правка мимо git",
+                     "=": "время совпадает — решать по смыслу"}[d["newer"]]
             out.append(f"    ~ {d['file']}: {where} "
                        f"(сервер {C.fmt_ts(d['b'])} | репозиторий {C.fmt_ts(d['a'])})")
     out += [
