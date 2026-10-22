@@ -233,7 +233,7 @@ python3 funding_monitor.py --top 5
 ```bash
 sudo cp ~/bybit-funding/deploy/*.service ~/bybit-funding/deploy/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now funding-watch dashboard funding-health.timer
+sudo systemctl enable --now funding-watch dashboard funding-health.timer drift-check.timer
 systemctl status funding-watch dashboard --no-pager
 ```
 
@@ -244,6 +244,7 @@ systemctl status funding-watch dashboard --no-pager
 | `funding-watch` | сам бот (`watch`), перезапуск при падении |
 | `dashboard` | панель на `127.0.0.1:8050` — доступ через SSH-туннель (публичный bind — только по запросу `DASHBOARD_PUBLIC=1`): закрытие позиции, управление сервисом бота (`systemctl`) и ручной вход |
 | `funding-health.timer` | ежедневная проверка (09:00 UTC) + авто-восстановление |
+| `drift-check.timer` | ежедневная сверка кода с эталоном (10:15 UTC): отчёт `~/bybit-funding/drift_report.txt` + алерт в Telegram |
 
 ---
 
