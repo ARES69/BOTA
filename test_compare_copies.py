@@ -125,6 +125,34 @@ def main() -> int:
                 sa[".env"]["hash"] == "" and sb[".env"]["hash"] == ""
                 and any(".env: отличается" in ln for ln in state_lines))
 
+    # 6b. бэкапы и логи — данные прогона, а не код (на VPS это
+    # config.json.bak.20261022_070218, memory.json.pre-sanity.bak,
+    # stats.log; без правила они давали ложный «дрейф» копий)
+    for root in (A, B):
+        write(root, "config.json.bak.20261022_070218", "{}\n", T1)
+        write(root, "memory.json.pre-sanity.bak", "{}\n", T1)
+        write(root, "stats.log", "строки\n", T1)
+    write(B, "stats.log", "другие строки\n", T2)
+    write(A, "_bak/20261022_065640/bot.py", "print(9)\n", T1)
+    write(B, "_bak/20261022_065640/bot.py", "print(9)\n", T1)
+    pa, sa = C.scan(A)
+    pb, sb = C.scan(B)
+    diff = C.compare(pa, pb)
+    touched = (set(diff["only_a"]) | set(diff["only_b"])
+               | {d["file"] for d in diff["differ"]})
+    ok &= check("бэкапы (*.bak) и логи (*.log) не попадают в сверку версии",
+                not ({".bak", "stats.log"} & {t.rsplit("/", 1)[-1]
+                                              for t in touched})
+                and not any(t.endswith(".bak") for t in touched)
+                and not any(t.endswith("stats.log") for t in touched))
+    ok &= check("каталог _bak не сверяется вообще",
+                not any(t.startswith("_bak/") for t in touched))
+    ok &= check("бэкапы и логи видны как данные прогона",
+                "config.json.bak.20261022_070218" in sa
+                and "stats.log" in sa
+                and any("stats.log" in ln
+                        for ln in C.state_diff(sa, sb, detailed=False)))
+
     # 7. main(): коды возврата и --json
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -133,7 +161,9 @@ def main() -> int:
     ok &= check("main: расхождения → код 1 и JSON с вердиктом",
                 rc_diff == 1 and payload["only_a"] == ["new_feature.py"]
                 and payload["only_b"] == ["other.py"]
-                and "разошлись" in payload["verdict"])
+                and "разошлись" in payload["verdict"]
+                and not any(p.endswith(".bak") for p in payload["only_a"])
+                and not any(p.startswith("_bak/") for p in payload["only_a"]))
 
     C2 = os.path.join(tmp, "C")
     shutil.copytree(A, C2)

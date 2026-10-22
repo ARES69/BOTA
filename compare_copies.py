@@ -17,6 +17,8 @@
   • данные прогона (position.json, bot.log, memory.json, dashboard.html,
     health_state.json, config.json, .env …) в версию не входят: они законно
     разные на разных машинах. Их отличие показывается отдельно, без паники.
+    Бэкапы (*.bak) и логи (*.log) — тоже данные прогона, не код.
+    Каталог _bak (автобэкапы) не сверяется вообще.
     Содержимое .env не читается никогда — только наличие и размер.
 
 Коды возврата: 0 — файлы проекта совпадают; 1 — есть расхождения;
@@ -46,7 +48,9 @@ KNOWN_COPIES = (
     r"C:\Users\lookastarik\Documents\BOTA\bybit-funding",
 )
 
-IGNORE_DIRS = {".git", ".freebuff", "__pycache__", ".idea", ".vscode"}
+# Каталоги, которые вообще не участвуют в сверке. _bak — каталог с
+# автобэкапами перед правками: содержимое там по определению отстаёт.
+IGNORE_DIRS = {".git", ".freebuff", "__pycache__", ".idea", ".vscode", "_bak"}
 
 # Данные прогона и локальные настройки: в версию проекта не входят.
 STATE_EXACT = {
@@ -56,13 +60,23 @@ STATE_EXACT = {
 }
 STATE_PREFIX = ("bot.log.",)
 
+# Бэкапы и логи: артефакты прошлых прогонов, а не код. На VPS это
+# config.json.bak.20261022_070218, memory.json.pre-sanity.bak,
+# position.json.pre-sanity.bak, stats.log — без правила они попадали в
+# сверку версии и давали ложный «дрейф».
+STATE_SUFFIX = (".bak", ".log")
+
 MTIME_EPS = 1.0        # секунда: mtime в пределах секунды считаем равным
 
 
 def is_state(rel: str) -> bool:
     """Файл — данные прогона (не версия проекта)?"""
     name = rel.rsplit("/", 1)[-1]
-    return name in STATE_EXACT or name.startswith(STATE_PREFIX)
+    if name in STATE_EXACT or name.startswith(STATE_PREFIX):
+        return True
+    if name.endswith(STATE_SUFFIX):
+        return True
+    return ".bak" in name      # config.json.bak.20261022_070218 и т.п.
 
 
 def file_hash(path: str) -> str:
