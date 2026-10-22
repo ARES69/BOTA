@@ -21,7 +21,9 @@ note()  { printf '%s\n' "$*"; }
 error() { printf 'ОШИБКА: %s\n' "$*"; fail=1; }
 
 note "=== 1. Секреты и данные прогона не отслеживаются ==="
-tracked="$(git ls-files 2>/dev/null)"
+# -z: пути без кавычек и без восьмеричного экранирования (иначе git
+# превращает кириллицу в "\320\217..." и пути не сойдутся с диском).
+tracked="$(git ls-files -z 2>/dev/null | tr '\0' '\n')"
 
 for f in .env config.json position.json snapshot.json bot.log memory.json \
          dashboard.html watch.out health_state.json backtest_data.json \
@@ -35,30 +37,66 @@ while IFS= read -r f; do
 done <<< "$(printf '%s\n' "$tracked" | grep -E '^bot\.log\.' || true)"
 
 note "=== 2. В отслеживаемых файлах нет настоящих секретов ==="
-# Строгие шаблоны: однозначные маркеры ключей и токенов.
-STRICT='-----BEGIN [A-Z ]*PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}'
-# Мягкий шаблон: присваивание секрету значения длиной 20+ символов.
-# Заглушки (`...`, `ваш-пароль`, `$VAR`) отфильтровываются отдельной строкой.
-SOFT='(api_key|api_secret|secret_key|access_key|token|password|passwd)\s*[=:]\s*.?[A-Za-z0-9_-]{20,}'
-PLACEHOLDER='ваш|your|here|example|placeholder|changeme|xxx|\.\.\.|<[^>]*>|\$\{|\$[A-Z_]'
+# Сканирование на Python: у git grep регулярка, начинающаяся с "-----",
+# трактуется как опция, а значения секретов нельзя печатать в лог.
+python - <<'PY' || fail=1
+import os
+import re
+import subprocess
+import sys
 
-hits="$(git grep -nEI "$STRICT" -- . 2>/dev/null || true)"
-hits="$(printf '%s\n' "$hits" | grep -vE "$PLACEHOLDER" || true)"
-if [ -n "$hits" ]; then
-    printf '%s\n' "$hits" | while IFS= read -r line; do
-        [ -n "$line" ] && error "похоже на секрет: $line"
-    done
-    fail=1
-fi
+# Консоль Windows по умолчанию cp1252 — печать кириллицы (пути, отчёт)
+# роняла скрипт с UnicodeEncodeError.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
 
-hits="$(git grep -nEI "$SOFT" -- . 2>/dev/null || true)"
-hits="$(printf '%s\n' "$hits" | grep -vE "$PLACEHOLDER" || true)"
-if [ -n "$hits" ]; then
-    printf '%s\n' "$hits" | while IFS= read -r line; do
-        [ -n "$line" ] && error "похоже на секрет: $line"
-    done
-    fail=1
-fi
+# Строгие маркеры: однозначно секрет, заглушками не отменяются.
+STRICT = [
+    ("приватный ключ", re.compile(rb"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("токен GitHub", re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}")),
+    ("ключ AWS", re.compile(rb"AKIA[0-9A-Z]{16}")),
+    ("токен Slack", re.compile(rb"xox[abprs]-[A-Za-z0-9-]{10,}")),
+]
+
+# Мягкое правило: секрету присвоено значение из 20+ символов.
+SOFT = re.compile(
+    rb"(?i)(api_key|api_secret|secret_key|access_key|token|password|passwd)"
+    rb"\s*[=:]\s*[\"']?([A-Za-z0-9_-]{20,})")
+
+# Значение-заглушка: «ваш-пароль», your_key_here, $VAR, <...> и т.п.
+PLACEHOLDER = re.compile(
+    rb"(?i)(your|here|example|placeholder|changeme|xxx|\.\.\.|<[^>]*>|\$[A-Za-z_{])")
+
+raw = subprocess.run(["git", "ls-files", "-z"], capture_output=True).stdout
+files = [p.decode("utf-8", "replace") for p in raw.split(b"\0") if p]
+
+problems = []
+for path in files:
+    try:
+        data = open(path, "rb").read()
+    except OSError:
+        continue
+    for num, line in enumerate(data.splitlines(), 1):
+        for label, rx in STRICT:
+            if rx.search(line):
+                problems.append((path, num, label))
+        for m in SOFT.finditer(line):
+            value = m.group(2)
+            if PLACEHOLDER.search(value):
+                continue          # заглушка, не настоящий секрет
+            problems.append((path, num,
+                             "значение секрета (%d символов)" % len(value)))
+
+if problems:
+    for path, num, label in problems:
+        print("ОШИБКА: %s:%d — %s (значение не показываем)" % (path, num, label))
+    sys.exit(1)
+
+print("проверено файлов: %d, секретов не найдено" % len(files))
+sys.exit(0)
+PY
 
 note "=== 3. Рабочее дерево совпадает с закоммиченным ==="
 # Сверка идёт через штатный compare_copies.py: файлы проекта на диске против
@@ -69,17 +107,27 @@ import os
 import subprocess
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath("ci/check_repo.sh")))
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001
+    pass
+
 sys.path.insert(0, ".")
 import compare_copies as C
 
-out = subprocess.run(["git", "ls-files"], capture_output=True, text=True)
-tracked = {p for p in out.stdout.splitlines() if p}
-project, _state = C.scan(".")
+# encoding="utf-8" обязателен: вывод git содержит кириллицу в путях, а
+# консоль Windows по умолчанию cp1252 — без явной кодировки декод падает.
+out = subprocess.run(["git", "ls-files", "-z"], capture_output=True,
+                     encoding="utf-8", errors="replace")
+tracked = {p for p in out.stdout.split("\0") if p}
+project, state = C.scan(".")
 on_disk = set(project)
 
 extra = sorted(on_disk - tracked)      # есть на диске, но не закоммичено
-missing = sorted(tracked - on_disk)    # закоммичено, но нет на диске
+# Отсутствующими считаем только файлы проекта: данные прогона (.env,
+# config.json и т.п.) compare_copies выносит в отдельный класс, и о них
+# заботится проверка №1 выше.
+missing = sorted((tracked - on_disk) - set(state))
 
 if missing:
     print("ОШИБКА: отслеживаются, но отсутствуют на диске: "
@@ -94,7 +142,7 @@ if extra:
           + ", ".join(extra))
     print("         (в CI это ошибка, локально — предупреждение)")
 
-print(f"файлов проекта на диске: {len(on_disk)}, отслеживается: {len(tracked)}")
+print("файлов проекта на диске: %d, отслеживается: %d" % (len(on_disk), len(tracked)))
 sys.exit(0)
 PY
 
