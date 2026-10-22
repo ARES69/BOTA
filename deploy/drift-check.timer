@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily drift-check: код на сервере против репозитория
+
+[Timer]
+# После health-check (09:00), чтобы два сетевых задания не стартовали разом.
+OnCalendar=*-*-* 10:15:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

@@ -57,6 +57,9 @@ STATE_EXACT = {
     ".env", "config.json", "position.json", "snapshot.json", "memory.json",
     "bot.log", "watch.out", "dashboard.html", "health_state.json",
     "backtest_data.json", "scalp_state.json",
+    # отчёт чекера дрейфа (drift_check.py) — результат проверки, не код;
+    # без этого записанный отчёт сам выглядел бы расхождением
+    "drift_report.txt", "drift_report.json",
 }
 STATE_PREFIX = ("bot.log.",)
 

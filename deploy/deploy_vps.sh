@@ -8,7 +8,8 @@ VPS="${VPS:?Укажите VPS=user@IP, например VPS=root@1.2.3.4 bash d
 # работает, но без памяти самообучения и без WS-ленты.
 FILES="funding_monitor.py funding_executor.py bybit_memory.py bybit_ws.py
        trade_sanity.py dashboard.py dashboard_metrics.py backtest.py
-       healthcheck.py smotrim.py diag_entry.py README.md"
+       healthcheck.py drift_check.py compare_copies.py smotrim.py diag_entry.py
+       README.md"
 ENVFILE="${ENVFILE:-.env}"
 
 # sudo нужен не всегда: при входе как root на минимальном Ubuntu пакета sudo
@@ -29,6 +30,7 @@ scp $FILES config.example.json "$VPS":~/bybit-funding/
 scp deploy/funding-watch.service deploy/dashboard.service \
     deploy/dashboard-public.conf \
     deploy/funding-health.service deploy/funding-health.timer \
+    deploy/drift-check.service deploy/drift-check.timer \
     "$VPS":~/bybit-funding/deploy/
 
 # тесты едут вместе с кодом: иначе шаг «прогоняю офлайн-тесты» ниже проверял
@@ -192,6 +194,21 @@ ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/funding-health.service ~/bybit-fundi
             $SUDO systemctl enable --now funding-health.timer && \
             systemctl list-timers funding-health.timer --no-pager"
 
+echo "==> [$VPS] ставлю ежедневную сверку кода с репозиторием (таймер)"
+ssh "$VPS" "$SUDO cp ~/bybit-funding/deploy/drift-check.service ~/bybit-funding/deploy/drift-check.timer /etc/systemd/system/ && \
+            $SUDO systemctl daemon-reload && \
+            $SUDO systemctl enable --now drift-check.timer && \
+            systemctl list-timers drift-check.timer --no-pager"
+# Ключ для чтения приватного репозитория делается один раз вручную (см.
+# README, «Сверка кода на сервере»): он не должен генерироваться при каждом
+# деплое, иначе старый ключ останется в GitHub и продолжит работать.
+if ! ssh "$VPS" "test -f ~/.ssh/github_deploy"; then
+    echo "!! нет ~/.ssh/github_deploy на сервере — сверка кода не сможет"
+    echo "   прочитать репозиторий. Одноразовая настройка описана в README"
+    echo "   (раздел «Сверка кода на сервере»); таймер уже включён и будет"
+    echo "   падать с кодом 2, пока ключа нет."
+fi
+
 if [ "$PUBLIC" = "1" ]; then
     echo "==> [$VPS] открываю порт панели (вход — только по паролю)"
     # ufw может не быть — тогда порт открыт по умолчанию, падать нельзя
@@ -216,5 +233,6 @@ fi
 echo "    Кнопки управления живут с токеном из DASHBOARD_TOKEN в ~/bybit-funding/.env"
 echo "    Лог бота:  ssh $VPS 'tail -20 ~/bybit-funding/watch.log'"
 echo "    Статус:    ssh $VPS 'systemctl status funding-watch dashboard --no-pager'"
+echo "    Дрейф:     ssh $VPS 'systemctl status drift-check --no-pager; cat ~/bybit-funding/drift_report.txt'"
 echo "    Позиция:   ssh $VPS 'cd ~/bybit-funding && python3 funding_executor.py status'"
 echo "    Закрыть:   ssh $VPS 'cd ~/bybit-funding && python3 funding_executor.py close'"

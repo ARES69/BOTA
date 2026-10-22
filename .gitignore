@@ -12,6 +12,8 @@ backtest_data.json
 scalp_state.json
 health_state.json
 watch.out
+drift_report.txt
+drift_report.json
 
 # Служебное
 .freebuff/

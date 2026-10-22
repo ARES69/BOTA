@@ -27,7 +27,7 @@ tracked="$(git ls-files -z 2>/dev/null | tr '\0' '\n')"
 
 for f in .env config.json position.json snapshot.json bot.log memory.json \
          dashboard.html watch.out health_state.json backtest_data.json \
-         scalp_state.json; do
+         scalp_state.json drift_report.txt drift_report.json; do
     if printf '%s\n' "$tracked" | grep -qxF "$f"; then
         error "файл '$f' отслеживается git — он не должен попадать в репозиторий"
     fi

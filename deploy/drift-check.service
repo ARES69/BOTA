@@ -1,0 +1,22 @@
+[Unit]
+Description=Bybit Funding Bot: сверка кода на сервере с репозиторием
+# Нужен только git+сеть: сверка не трогает запущенные сервисы бота.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/bybit-funding
+# Эталон — origin/main (то, что запушили с рабочей машины); кэш git лежит в
+# ~/.cache/bybit-drift/, отчёт — в папке проекта (он в .gitignore и в
+# данных прогона, поэтому сам расхождением не считается).
+# Ключ deploy-ключа GitHub — ~/.ssh/github_deploy (только чтение).
+ExecStart=/usr/bin/python3 %h/bybit-funding/drift_check.py --quiet
+# Настройки — в .env, как у остальных юнитов (права 600).
+EnvironmentFile=-%h/bybit-funding/.env
+
+# Код возврата 1 = найдены расхождения. Это НЕ сбой юнита, но и прятать
+# его в SuccessExitStatus 0 1 не будем: расхождение должно быть видно в
+# `systemctl --failed`, иначе проверка есть, а сигнала нет.
+TimeoutStartSec=300
+Nice=10

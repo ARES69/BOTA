@@ -762,7 +762,7 @@ pull request и вручную (кнопка «Run workflow»). Три зада�
 
 | Задача | Что делает | Зачем |
 |---|---|---|
-| `tests` | `run_tests.py` — все 27 тестов на Python 3.10, 3.12 и 3.14 | 3.10 — нижняя граница, 3.12 — как на VPS, 3.14 — как на рабочей машине |
+| `tests` | `run_tests.py` — все 28 тестов на Python 3.10, 3.12 и 3.14 | 3.10 — нижняя граница, 3.12 — как на VPS, 3.14 — как на рабочей машине |
 | `copies` | `compare_copies.py` (коммит ↔ рабочая копия) + `ci/check_repo.sh` | ловит CRLF-дрейф и расхождение байтов, секреты в индексе и файлы, забытые в коммите |
 | `vps-drift` | сверка коммита с кодом на сервере | по умолчанию **выключена** (нужны секреты) |
 
@@ -770,7 +770,7 @@ pull request и вручную (кнопка «Run workflow»). Три зада�
 не нужен (paramiko требуется только `deploy/`).
 
 Набор тестов защищён от «тихого» сокращения: если тестовый файл удалили или
-забыли закоммитить, задача падает. Ожидаемое число — 27; после осознанного
+забыли закоммитить, задача падает. Ожидаемое число — 28; после осознанного
 добавления теста поднимите переменную репозитория `EXPECTED_TESTS`
 (Settings → Secrets and variables → Actions → Variables).
 
@@ -793,6 +793,63 @@ bash ci/install_hooks.sh    # повесить их на git pre-push
 > API отвечает `Actions has been disabled for this user`, ни один workflow не
 > запустится — это ограничение аккаунта, а не репозитория.
 
+## Сверка кода на сервере (`drift_check.py`)
+
+CI вида `vps-drift` смотрит на сервер снаружи. Но чаще всего нужно обратное:
+знать **на самом сервере**, не отстал ли его код от того, что запушили с
+рабочей машины. Это делает `drift_check.py` плюс таймер `drift-check.timer`
+(ежедневно в 10:15, `Persistent=true` — пропущенный день отработает при
+следующем включении).
+
+Как работает: скрипт забирает ветку `main` из приватного репозитория в
+кэш `~/.cache/bybit-drift/` (только новое, `--depth 1`), распаковывает её
+во временный каталог и сравнивает с `~/bybit-funding` через
+`compare_copies.py` — те же правила, что у локальной сверки копий:
+
+- сравниваются только **файлы проекта** (код, тесты, `deploy/`, документация);
+- данные прогона и бэкапы (`.env`, `position.json`, `memory.json`, `*.bak`,
+  `*.log`, каталог `_bak`) расхождением не считаются;
+- отчёт `drift_report.txt` тоже исключён — иначе после первого расхождения
+  он сам стал бы «расхождением».
+
+Если хеши разошлись, скрипт пишет отчёт и выходит с кодом 1 — юнит попадает
+в `systemctl --failed`, а в Telegram уходит короткий алерт (повтор того же
+набора — не чаще раза в сутки). В отчёте по каждому файлу указано, кто новее
+и что делать: «разверните» (есть в репозитории, нет на сервере) или «мимо
+git» (есть только на сервере). Успешная проверка удаляет старый отчёт,
+чтобы он не пугал устаревшим текстом.
+
+```bash
+# на сервере — то же, что делает таймер
+python3 drift_check.py --quiet
+echo $?                       # 0 — сходится; 1 — расхождения; 2 — не смогли получить эталон
+
+# разобраться вручную
+systemctl status drift-check --no-pager
+cat ~/bybit-funding/drift_report.txt
+journalctl -u drift-check -n 30 --no-pager
+
+# сравнить с произвольной папкой (без git) — удобно при разборе
+python3 drift_check.py --local /tmp/копия --report /tmp/r.txt
+```
+
+Одноразовая настройка ключа (делается ОДИН раз; при каждом деплое ключ не
+перегенерируется, иначе старый останется в GitHub и продолжит работать):
+
+```bash
+# 1. на сервере — ключ только для чтения
+ssh-keygen -t ed25519 -f ~/.ssh/github_deploy -N "" -C "drift-check@vps"
+
+# 2. на рабочей машине — добавить его в репозиторий как read-only deploy key
+gh repo deploy-key add <(ssh root@<IP> 'cat ~/.ssh/github_deploy.pub') \
+    --repo lookastarik/bybit-funding --title "vps-drift-check (read-only)"
+
+# 3. поставить таймер (это уже делает deploy/deploy_vps.sh)
+sudo cp ~/bybit-funding/deploy/drift-check.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now drift-check.timer
+systemctl list-timers drift-check.timer --no-pager
+```
+
 ## Файлы
 
 - `funding_monitor.py` — монитор с риск-фильтром (только чтение)
@@ -810,6 +867,12 @@ bash ci/install_hooks.sh    # повесить их на git pre-push
 - `deploy/funding-watch.service` — systemd-юнит watch (testnet, --ws) для VPS
 - `deploy/deploy_vps.sh` — развёртывание всего на VPS (копирование, тесты,
   systemd, firewall, порт панели)
+- `deploy/drift-check.service`, `deploy/drift-check.timer` — ежедневная
+  сверка кода на сервере с репозиторием
+- `drift_check.py` — сверка кода на сервере с репозиторием, отчёт при
+  расхождении (`--local`, `--json`, `--no-alert`)
+- `test_drift_check.py` — логика этой сверки: расхождения, данные прогона,
+  коды возврата, удаление старого отчёта
 - `deploy/install_key.py` — ставит локальный SSH-ключ в `authorized_keys`
   сервера по root-паролю (`python deploy/install_key.py --ask` — спросит в
   терминале, пароль не печатается и не попадает в историю). Ключ берётся

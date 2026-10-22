@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           expected="${{ vars.EXPECTED_TESTS }}"
-          [ -n "$expected" ] || expected=27
+          [ -n "$expected" ] || expected=28
           actual=$(python -c 'import sys; sys.path.insert(0, "."); import run_tests; print(len(run_tests.discover()))')
           echo "тестовых файлов: $actual (ожидается $expected)"
           if [ "$actual" -ne "$expected" ]; then
