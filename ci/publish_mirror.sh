@@ -33,9 +33,17 @@ if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$VPS" \
     exit 1
 fi
 
-if ! git push --quiet --force "$VPS:$MIRROR" HEAD:refs/heads/main; then
+# --no-verify обязателен: это тоже git push, и без него сработал бы
+# pre-push хук, который сам вызывает этот скрипт — бесконечная рекурсия
+# (каждый виток прогонял бы все тесты).
+if ! git push --no-verify --quiet --force "$VPS:$MIRROR" HEAD:refs/heads/main; then
     echo "не удалось отправить зеркало на $VPS" >&2
     exit 1
 fi
+
+# В свежем bare-репозитории HEAD смотрит на master — направляем на main,
+# иначе `git -C ~/bybit-drift/mirror.git log` у человека падает.
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$VPS" \
+    "git -C ~/$MIRROR symbolic-ref HEAD refs/heads/main" 2>/dev/null || true
 
 echo "зеркало обновлено: $VPS:~/$MIRROR ($(git rev-parse --short HEAD))"
